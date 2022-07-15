@@ -1,3 +1,5 @@
+mod isa;
+mod engine;
 mod ds;
 
 fn main() {

@@ -282,7 +282,7 @@ impl<K: PartialOrd<K> + Clone + Eq, V: Clone> Iterator for SkipListIter<K, V> {
     }
 }
 
-impl<K: PartialOrd<K> + Clone + Eq, V: Clone> IntoIterator for SkipList<K, V> {
+impl<K: PartialOrd<K> + Clone + Eq, V: Clone> IntoIterator for &SkipList<K, V> {
     type Item = (K, V);
     type IntoIter = SkipListIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
