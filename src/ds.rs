@@ -185,8 +185,47 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             data: None,
         }), height: 0 }
     }
-    fn iter(&self) -> SkipListIter<K, V> {
+    pub fn iter(&self) -> SkipListIter<K, V> {
         SkipListIter { stack: vec![self.root.clone()], last_key: None }
+    }
+    fn dfs_del(ptr: Rc<SkipListNode<K, V>>, k: &K) -> Rc<SkipListNode<K, V>> {
+        let mut ans = ptr.as_ref().clone();
+        if let Some((cur_k, v)) = &ans.data {
+            if k == cur_k {
+                if matches!(v, None) {
+                    return ptr;
+                } else {
+                    ans.data = Some((k.clone(), None));
+                    return Rc::new(ans);
+                }
+            }
+            if cur_k > k {
+                return ptr;
+            }
+        }
+        if Self::is_go_right(&ptr.neighbor, k) {
+            let nxt = &ans.neighbor.unwrap();
+            let nxt2 = Self::dfs_del(nxt.clone(), k);
+            if Rc::ptr_eq(nxt, &nxt2) {
+                return ptr;
+            }
+            ans.neighbor = Some(nxt2);
+        } else if let Some(child) = &ptr.child {
+            let child2 = Self::dfs_del(child.clone(), k);
+            if Rc::ptr_eq(child, &child2) {
+                return ptr;
+            }
+            ans.child = Some(child2);
+        } else {
+            return ptr;
+        }
+        return Rc::new(ans);
+    }
+    pub fn del(&self, k: &K) -> Self {
+        Self {
+            root: Self::dfs_del(self.root.clone(), k),
+            height: self.height,
+        }
     }
 }
 
@@ -230,8 +269,8 @@ impl<K: PartialOrd<K> + Clone + Eq, V: Clone> Iterator for SkipListIter<K, V> {
                             }
                         }
                         if ret {
+                            self.last_key = Some(k.clone());
                             if let Some(v2) = v {
-                                self.last_key = Some(k.clone());
                                 return Some((k.clone(), v2.clone()));
                             }
                         }
@@ -273,6 +312,10 @@ mod tests {
                     k = valid_keys[rng.gen_range(0..valid_keys.len())];
                 }
                 assert_eq!(pred.get(&k), truth.get(&k));
+                if rng.gen() {
+                    truth.remove(&k);
+                    pred = pred.del(&k);
+                }
             }
         }
         let mut truth_list: Vec<_> = truth.iter().map(|x| (*x.0, *x.1)).collect();
