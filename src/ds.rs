@@ -79,7 +79,7 @@ impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
         }
         n*/
     }
-    fn get(&self, k: &K) -> Option<V> {
+    pub fn get(&self, k: &K) -> Option<V> {
         let ptr = self.root;
         loop {
             let down = true;
@@ -100,67 +100,78 @@ impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
             }
         }
     }
+    /**
+     * ptr is the last element <= k. It is one level lower than k.
+     */
+    fn dfs_find_child(ptr: Rc<SkipListNode<K, V>>, k: K, v: V) -> Option<Rc<SkipListNode<K, V>>> {
+        if let Some((p_k, _)) = ptr.data {
+            if p_k > k {
+                return Some(ptr);
+            }
+        }
+        if let Some(neighbor) = ptr.neighbor {
+            if k >= neighbor.data.unwrap().0 {
+                return Self::dfs_find_child(neighbor, k, v);
+            }
+        }
+        if let Some(child) = ptr.child {
+            if let Some(child2) = Self::dfs_find_child(child, k, v) {
+                if let Some(neighbor) = ptr.neighbor {
+                    if neighbor.data.unwrap().0 < child2.data.unwrap().0 {
+                        return Some(neighbor);
+                    }
+                }
+                return Some(child2);
+            }
+        }
+        return ptr.neighbor;
+    }
+    fn equal_key(data1: Option<(K, V)>, data2: Option<(K, V)>) -> bool {
+        data1.map(|x| x.0) == data2.map(|x| x.0)
+    }
+    fn is_go_right(ptr: Option<Rc<SkipListNode<K, V>>>, k: K) -> bool {
+        if let Some(x) = ptr {
+            k >= x.data.unwrap().0
+        } else { false }
+    }
     fn dfs_add(ptr: Rc<SkipListNode<K, V>>, k: K, v: V, h: usize) -> Rc<SkipListNode<K, V>>{
         let ans = SkipListNode {
             neighbor: ptr.neighbor,
             child: ptr.child,
             data: ptr.data,
         };
-        if let Some((cur_k, cur_v)) = ptr.data {
+        if let Some((cur_k, _)) = ptr.data {
             if k == cur_k {
                 ans.data = Some((cur_k, v));
                 return Rc::new(ans);
             }
         }
-        let down = true;
-        if let Some(neighbor) = ptr.neighbor {
-            let next_k = &neighbor.data.unwrap().0;
-            if &k >= next_k {
-                down = false;
-            }
-        }
-        if !down {
+        if Self::is_go_right(ptr.neighbor, k) { // Search on the right
             ans.neighbor = Some(Self::dfs_add(ptr.neighbor.unwrap(), k, v, h));
         } else if h == 0 { // Insert on the right
-            let x = SkipListNode {
+            ans.neighbor = Some(Rc::new(SkipListNode {
                 neighbor: ptr.neighbor,
-                child: ptr.child,
+                child: ptr.child.map(|x| Self::dfs_find_child(x, k, v)).flatten(),
                 data: Some((k, v)),
-            };
-            loop {
-                if let Some(c) = x.child {
-                    let go_right = false;
-                    if let Some((child_k, _)) = c.data {
-                        if child_k <= k {
-                            go_right = true;
-                        }
-                    } else {
-                        go_right = true;
-                    }
-                    if go_right {
-                        x.child = c.neighbor;
-                        continue;
-                    }
-                }
-                break;
-            }
-            ans.neighbor = Some(Rc::new(x));
+            }));
+        } else if Self::is_go_right(ptr.child, k) {
+            ans.child = Some(Self::dfs_add(ptr.child.unwrap(), k, v, h - 1));
+        } else if h == 1 {
+            ans.child = Some(Rc::new(SkipListNode {
+                neighbor: ptr.child,
+                child: None,
+                data: Some((k, v)),
+            }));
         } else {
-            ans.child = Some(Self::dfs_add(match ptr.child {
-                Some(c) => c,
-                None => Rc::new(SkipListNode { neighbor: None, child: None, data: ptr.data }),
-            }, k, v, h - 1));
-        }
-        if let Some(c) = ans.child {
-            if let Some((sub_k, _)) = c.data {
-                if k == sub_k {
-                    ans.child = c.neighbor;
-                }
-            }
+            ans.child = Some(Self::dfs_add(Rc::new(SkipListNode {
+                neighbor: None,
+                child: None,
+                data: ptr.data,
+            }), k, v, h - 1));
         }
         Rc::new(ans)
     }
-    fn add(&self, k: K, v: V) -> Self {
+    pub fn add(&self, k: K, v: V) -> Self {
         let h = Self::gen_height();
         let ptr = self.root;
         let new_h = self.height;
