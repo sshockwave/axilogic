@@ -1,4 +1,4 @@
-use std::{rc::Rc, vec::Vec};
+use std::{rc::Rc, vec::Vec, iter::{IntoIterator, Iterator}};
 
 #[derive(PartialEq, Eq)]
 struct StackElement<T> {
@@ -182,6 +182,68 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             data: None,
         }), height: 0 }
     }
+    fn iter(&self) -> SkipListIter<K, V> {
+        SkipListIter { stack: vec![self.root.clone()], last_key: None }
+    }
+}
+
+struct SkipListIter<K, V> {
+    // all nodes are unused
+    stack: Vec<Rc<SkipListNode<K, V>>>,
+    last_key: Option<K>,
+}
+
+impl<K: PartialOrd<K> + Clone + Eq, V: Clone> SkipListIter<K, V> {
+    fn try_push(&mut self, ptr: Rc<SkipListNode<K, V>>) {
+        if let Some(fa) = self.stack.last() {
+            if let Some((k, _)) = &ptr.data {
+                if k >= &fa.data.as_ref().unwrap().0 {
+                    return;
+                }
+            }
+        }
+        self.stack.push(ptr);
+    }
+}
+
+impl<K: PartialOrd<K> + Clone + Eq, V: Clone> Iterator for SkipListIter<K, V> {
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop() {
+                Some(x) => {
+                    if let Some(v) = &x.neighbor {
+                        self.try_push(v.clone());
+                    }
+                    if let Some(v) = &x.child {
+                        self.try_push(v.clone());
+                    }
+                    if let Some((k, _)) = &x.data {
+                        let mut ret = true;
+                        if let Some(last_k) = &self.last_key {
+                            assert!(last_k <= k);
+                            if last_k == k {
+                                ret = false;
+                            }
+                        }
+                        if ret {
+                            self.last_key = Some(k.clone());
+                            return x.data.clone();
+                        }
+                    }
+                },
+                None => break None,
+            }
+        }
+    }
+}
+
+impl<K: PartialOrd<K> + Clone + Eq, V: Clone> IntoIterator for SkipList<K, V> {
+    type Item = (K, V);
+    type IntoIter = SkipListIter<K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 #[cfg(test)]
@@ -208,6 +270,10 @@ mod tests {
                 assert_eq!(pred.get(&k), truth.get(&k));
             }
         }
+        let mut truth_list: Vec<_> = truth.iter().map(|x| (*x.0, *x.1)).collect();
+        truth_list.sort();
+        let pred_list: Vec<_> = pred.iter().collect();
+        assert_eq!(pred_list, truth_list);
     }
     #[test]
     fn test_skiplist() {
