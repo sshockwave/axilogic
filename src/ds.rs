@@ -69,15 +69,11 @@ struct SkipList<K: PartialOrd<K> + Eq, V> {
 
 impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
     fn gen_height() -> usize {
-        return 0;
-        /*
-        use rand::Rng;
-        let mut rng = rand::task_rng();
         let n = 0;
-        while rng.gen() {
+        while rand::random() {
             n += 1;
         }
-        n*/
+        n
     }
     pub fn get(&self, k: &K) -> Option<V> {
         let ptr = self.root;
