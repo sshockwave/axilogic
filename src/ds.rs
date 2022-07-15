@@ -1,5 +1,7 @@
 use std::{rc::Rc, vec::Vec, iter::{IntoIterator, Iterator}};
 
+use rand::Rng;
+
 #[derive(PartialEq, Eq)]
 struct StackElement<T> {
     prev: Vec<Rc<Self>>,
@@ -60,11 +62,11 @@ impl<T> PersistentStack<T> {
 struct SkipListNode<K, V> {
     neighbor: Option<Rc<Self>>,
     child: Option<Rc<Self>>,
-    data: Option<(K, V)>,
+    data: Option<(K, Option<V>)>,
 }
 
 #[derive(Clone)]
-struct SkipList<K: PartialOrd<K> + Eq + Clone, V: Clone> {
+pub struct SkipList<K: PartialOrd<K> + Eq + Clone, V: Clone> {
     root: Rc<SkipListNode<K, V>>,
     height: usize,
 }
@@ -72,7 +74,8 @@ struct SkipList<K: PartialOrd<K> + Eq + Clone, V: Clone> {
 impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
     fn gen_height() -> usize {
         let mut n = 0;
-        while rand::random() {
+        let mut rng = rand::thread_rng();
+        while rng.gen() {
             n += 1;
         }
         n
@@ -86,7 +89,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             }
             if let Some((cur_k, cur_v)) = &ptr.data {
                 if k == cur_k {
-                    break Some(cur_v);
+                    break cur_v.as_ref();
                 }
                 if k < &cur_k {
                     break None;
@@ -116,7 +119,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
                 return Some(Rc::new(SkipListNode {
                     neighbor: ptr.neighbor.clone(),
                     child: Some(child2),
-                    data: Some((k, v)),
+                    data: Some((k, None)),
                 }));
             }
         }
@@ -136,7 +139,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
         let mut ans = ptr.as_ref().clone();
         if let Some((cur_k, _)) = &ptr.data {
             if &k == cur_k {
-                ans.data = Some((k, v));
+                ans.data = Some((k, Some(v)));
                 return Rc::new(ans);
             }
         }
@@ -146,7 +149,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             ans.neighbor = Some(Rc::new(SkipListNode {
                 neighbor: ptr.neighbor.clone(),
                 child: ptr.child.clone().map(|x| Self::dfs_find_child(x, k.clone(), v.clone())).flatten(),
-                data: Some((k, v)),
+                data: Some((k, Some(v))),
             }));
         } else if Self::is_go_right(&ptr.child, &k) {
             ans.child = Some(Self::dfs_add(ptr.child.as_ref().unwrap().clone(), k, v, h - 1));
@@ -154,13 +157,13 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             ans.child = Some(Rc::new(SkipListNode {
                 neighbor: ptr.child.clone(),
                 child: None,
-                data: Some((k, v)),
+                data: Some((k, Some(v))),
             }));
         } else {
             ans.child = Some(Self::dfs_add(Rc::new(SkipListNode {
                 neighbor: ptr.child.clone(),
                 child: None,
-                data: ptr.data.clone(),
+                data: ptr.data.as_ref().map(|x| (x.0.clone(), None)),
             }), k, v, h - 1));
         }
         Rc::new(ans)
@@ -187,7 +190,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
     }
 }
 
-struct SkipListIter<K, V> {
+pub struct SkipListIter<K, V> {
     // all nodes are unused
     stack: Vec<Rc<SkipListNode<K, V>>>,
     last_key: Option<K>,
@@ -218,7 +221,7 @@ impl<K: PartialOrd<K> + Clone + Eq, V: Clone> Iterator for SkipListIter<K, V> {
                     if let Some(v) = &x.child {
                         self.try_push(v.clone());
                     }
-                    if let Some((k, _)) = &x.data {
+                    if let Some((k, v)) = &x.data {
                         let mut ret = true;
                         if let Some(last_k) = &self.last_key {
                             assert!(last_k <= k);
@@ -227,8 +230,10 @@ impl<K: PartialOrd<K> + Clone + Eq, V: Clone> Iterator for SkipListIter<K, V> {
                             }
                         }
                         if ret {
-                            self.last_key = Some(k.clone());
-                            return x.data.clone();
+                            if let Some(v2) = v {
+                                self.last_key = Some(k.clone());
+                                return Some((k.clone(), v2.clone()));
+                            }
                         }
                     }
                 },
