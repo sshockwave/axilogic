@@ -127,7 +127,9 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
     }
     fn is_go_right(ptr: &Option<Rc<SkipListNode<K, V>>>, k: &K) -> bool {
         if let Some(x) = ptr {
-            k >= &x.data.as_ref().unwrap().0
+            if let Some((ptr_k, _)) = x.data.as_ref() {
+                k >= ptr_k
+            } else { true } // ptr is the first node
         } else { false }
     }
     fn dfs_add(ptr: Rc<SkipListNode<K, V>>, k: K, v: V, h: usize) -> Rc<SkipListNode<K, V>>{
@@ -156,7 +158,7 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             }));
         } else {
             ans.child = Some(Self::dfs_add(Rc::new(SkipListNode {
-                neighbor: None,
+                neighbor: ptr.child.clone(),
                 child: None,
                 data: ptr.data.clone(),
             }), k, v, h - 1));
@@ -179,5 +181,48 @@ impl<K: PartialOrd<K> + Eq + Clone, V: Clone> SkipList<K, V> {
             child: None,
             data: None,
         }), height: 0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{Rng, SeedableRng};
+
+    fn test_skiplist_case<R: Rng>(mut rng: R, n: u32, max_v: u32) {
+        use std::collections::HashMap;
+        let mut pred = SkipList::new();
+        let mut truth = HashMap::new();
+        let mut valid_keys = Vec::new();
+        for _ in 0..n {
+            let mut k = rng.gen_range(0..max_v);
+            if rng.gen() {
+                let v = rng.gen::<i32>();
+                pred = pred.add(k, v);
+                truth.insert(k, v);
+                valid_keys.push(k);
+            } else {
+                if valid_keys.len() > 0 && rng.gen() {
+                    k = valid_keys[rng.gen_range(0..valid_keys.len())];
+                }
+                assert_eq!(pred.get(&k), truth.get(&k));
+            }
+        }
+    }
+    #[test]
+    fn test_skiplist() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        for _ in 0..1000 {
+            test_skiplist_case(&mut rng, 100, 10);
+        }
+        for _ in 0..100 {
+            test_skiplist_case(&mut rng, 1000, 100);
+        }
+        for _ in 0..100 {
+            test_skiplist_case(&mut rng, 1000, 1000);
+        }
+        for _ in 0..100 {
+            test_skiplist_case(&mut rng, 1000, 1000000);
+        }
     }
 }
