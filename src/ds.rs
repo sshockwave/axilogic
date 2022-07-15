@@ -97,6 +97,9 @@ impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
                 if k == &cur_k {
                     break Some(cur_v);
                 }
+                if k < &cur_k {
+                    break None;
+                }
             }
         }
     }
@@ -105,14 +108,12 @@ impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
      */
     fn dfs_find_child(ptr: Rc<SkipListNode<K, V>>, k: K, v: V) -> Option<Rc<SkipListNode<K, V>>> {
         if let Some((p_k, _)) = ptr.data {
-            if p_k > k {
+            if p_k >= k {
                 return Some(ptr);
             }
         }
-        if let Some(neighbor) = ptr.neighbor {
-            if k >= neighbor.data.unwrap().0 {
-                return Self::dfs_find_child(neighbor, k, v);
-            }
+        if Self::is_go_right(ptr.neighbor, k) {
+            return Self::dfs_find_child(ptr.neighbor.unwrap(), k, v);
         }
         if let Some(child) = ptr.child {
             if let Some(child2) = Self::dfs_find_child(child, k, v) {
@@ -121,7 +122,11 @@ impl<K: PartialOrd<K> + Eq, V> SkipList<K, V> {
                         return Some(neighbor);
                     }
                 }
-                return Some(child2);
+                return Some(Rc::new(SkipListNode {
+                    neighbor: ptr.neighbor,
+                    child: Some(child2),
+                    data: Some((k, v))
+                }));
             }
         }
         return ptr.neighbor;
