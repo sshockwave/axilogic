@@ -1,5 +1,4 @@
-use std::{rc::Rc, vec::Vec};
-use std::fmt;
+use std::{rc::Rc, vec::Vec, iter, fmt};
 
 use super::{ds, isa::{ISA, OperationError}};
 
@@ -9,21 +8,29 @@ pub struct Engine {
     stack: Vec<Term>,
     num_symbols: usize,
     num_concepts: usize,
-    assume_height: Option<usize>, // stack[assume_height:] is falsy
+    num_assum: usize,
 }
 
 pub enum TermEnum {
     Symbol(usize),
     SymbolRef(usize),
     Assumption(Term),
+    Express,
     Forall {
         var: usize,
         expr: Term,
     },
     Imply(Term, Term),
-    Concept {
+    ConceptDef{
         id: usize,
-        val: Option<(Term, Term)>, // (cur_val, rest)
+        vars: Vec<usize>,
+        defs: Vec<Term>,
+    },
+    Concept{
+        id: usize,
+        vars: Vec<Term>,
+        defs: Vec<Term>,
+        loop_ptr: usize,
     },
     Closure(Term, Env),
 }
@@ -35,14 +42,14 @@ pub struct Term(Rc<TermEnum>);
 impl Term {
     fn is_movable(&self) -> bool {
         match self.0.as_ref() {
-            Symbol(_) | Assumption(_) => false,
+            Symbol(_) | Assumption(_) | Express | ConceptDef {..} => false,
             _ => true,
         }
     }
     fn unwrap_closure(&self) -> Self {
         if let Closure(expr, env) = self.0.as_ref() {
             match expr.0.as_ref() {
-                Symbol(_) | Assumption(_) => panic!("Closure should not contain non-movable terms"),
+                Symbol(_) | Assumption(_) | Express => panic!("Closure should not contain non-movable terms"),
                 SymbolRef(id) => env.get(id).map(Self::unwrap_closure).unwrap_or_else(|| expr.clone()),
                 Forall { var, expr } => Self::from(Forall {
                     var: var.clone(),
@@ -60,13 +67,21 @@ impl Term {
                     }
                     Self::unwrap_closure(&Term::from(Closure(expr.clone(), new_env)))
                 },
-                Concept { id, val} => Term::from(Concept {
-                    id: *id,
-                    val: val.as_ref().map(|x| (
-                        Term::from(Closure(x.0.clone(), env.clone())),
-                        Term::from(Closure(x.1.clone(), env.clone())),
-                    )),
-                }),
+                Concept {..} => expr.clone(),
+                ConceptDef { id, vars, defs } => {
+                    let mut vars2 = Vec::with_capacity(vars.len());
+                    let mut defs2 = Vec::with_capacity(defs.len());
+                    let mut env2 = Env::new();
+                    for k in vars {
+                        let v = env.get(k).unwrap();
+                        vars2.push(v.clone());
+                        env2 = env2.add(*k, v.clone());
+                    }
+                    for t in defs {
+                        defs2.push(Term::from(Closure(t.clone(), env2.clone())));
+                    }
+                    Term::from(Concept { id: *id, loop_ptr: 0, vars: vars2, defs: defs2 })
+                }
             }
         } else {
             self.clone()
@@ -82,12 +97,10 @@ impl Term {
         match (a.get_enum(), b.get_enum()) {
             (Symbol(a), Symbol(b)) => a == b,
             (SymbolRef(a), SymbolRef(b)) => a == b,
+            (Express, Express) => true,
+            (ConceptDef{id: id1, ..}, ConceptDef{id: id2, ..}) => id1 == id2,
             _ => false,
         }
-    }
-    fn deep_eq(a: &Term, b: &Term) -> bool {
-        // TODO: implement strong deep equal
-        Self::shallow_eq(a, b)
     }
 }
 
@@ -120,7 +133,11 @@ impl ISA for Engine {
         }
         let el = self.stack[idx].clone();
         let new_el = match el.get_enum() {
-            Symbol(d) => Term::from(SymbolRef(d.clone())),
+            Symbol(d) => if self.is_normal_mode() {
+                return Err(OperationError::new("symbols cannot be used in normal mode"));
+            } else {
+                Term::from(SymbolRef(d.clone()))
+            },
             Assumption(v) => v.clone(),
             _ => el.clone(),
         };
@@ -132,10 +149,9 @@ impl ISA for Engine {
         let el = if let Some(v) = self.stack.pop() { v } else {
             return Err(OperationError::new("Cannot pop on empty stack"));
         };
-        if let Some(v) = self.assume_height {
-            if self.stack.len() <= v {
-                self.assume_height = None;
-            }
+        if let Express = el.0.as_ref() {
+            assert!(self.num_assum > 0);
+            self.num_assum -= 1;
         }
         Ok(())
     }
@@ -168,7 +184,7 @@ impl ISA for Engine {
         let expr = self.stack.pop().unwrap();
         let sym = self.stack.pop().unwrap();
         if !expr.is_movable() {
-            return Err(OperationError::new("Cannot use movable element as expression"));
+            return Err(OperationError::new("Cannot use non-movable element as expression"));
         }
         self.stack.push(match sym.get_enum() {
             Symbol(d) => Term::from(Forall { var: *d, expr }),
@@ -187,15 +203,15 @@ impl ISA for Engine {
         let param = self.stack.pop().unwrap();
         let func = self.stack.pop().unwrap();
         if !param.is_movable() {
-            return Err(OperationError::new("Cannot use movable element as parameter"));
+            return Err(OperationError::new("Cannot use non-movable element as parameter"));
         }
-        self.stack.push(match func.unwrap_closure().get_enum() {
+        let el = match func.unwrap_closure().get_enum() {
             Forall { var, expr } => Term::from(Closure (
                 // TODO: boost by testing whether underlying expr is a closure
                 expr.clone(),
                 Env::new().add(*var, param),
             )),
-            Imply(p, q) => if Term::deep_eq(&param, p) {
+            Imply(p, q) => if self.deep_eq(&param, p) {
                 q.clone()
             } else {
                 return Err(OperationError::new("Not deep equal when applying antecedent"));
@@ -203,7 +219,8 @@ impl ISA for Engine {
             _ => {
                 return Err(OperationError::new("Only implication or function is appliable"));
             }
-        });
+        };
+        self.stack.push(el);
         Ok(())
     }
 
@@ -226,30 +243,27 @@ impl ISA for Engine {
     }
 
     fn express(&mut self) -> Result<()> {
-        if let Some(_) = self.assume_height {
-            return Err(OperationError::new("Already in assumption mode"));
-        }
-        self.assume_height = Some(self.stack.len());
+        self.stack.push(Term::from(Express));
+        self.num_assum += 1;
         Ok(())
     }
 
     fn assume(&mut self) -> Result<()> {
-        if let Some(x) = self.stack.pop() {
-            if !x.is_movable() {
-                return Err(OperationError::new("Non-movable expression cannot be assumed"));
-            }
-            if let Some(h) = self.assume_height {
-                if self.stack.len() == h {
-                    self.assume_height = None;
-                }
-                self.stack.push(Term::from(Assumption(x)));
-                Ok(())
-            } else {
-                Err(OperationError::new("Cannot assume in normal mode"))
-            }
-        } else {
-            Err(OperationError::new("Nothing to assume"))
+        let x = if let Some(x) = self.stack.pop() { x } else {
+            return Err(OperationError::new("Nothing to assume"));
+        };
+        if !x.is_movable() {
+            return Err(OperationError::new("Non-movable expression cannot be assumed"));
         }
+        let e = if let Some(v) = self.stack.pop() { v } else {
+            return Err(OperationError::new("Missing express"));
+        };
+        if let Express = e.get_enum() { } else {
+            return Err(OperationError::new("Assumption should be made on an express"));
+        }
+        self.stack.push(Term::from(Assumption(x)));
+        self.num_assum -= 1;
+        Ok(())
     }
 
     fn trust(&mut self) -> Result<()> {
@@ -285,13 +299,16 @@ impl ISA for Engine {
     fn concept(&mut self) -> Result<(Self::Term, bool)> {
         self.num_concepts += 1;
         let id = self.num_concepts;
-        let mut val = None;
+        let mut vars = Vec::new();
+        let mut defs = Vec::new();
         for t in self.stack.iter() {
-            if let Assumption(p) =  t.get_enum() {
-                val = Some((p.clone(), Term::from(Concept { id, val })));
+            match t.get_enum() {
+                Assumption(t) => defs.push(t.clone()),
+                Symbol(x) => vars.push(*x),
+                _ => (),
             }
         }
-        Ok((self.wrap_env(Term::from(Concept{ id, val })), self.is_normal_mode()))
+        Ok((self.wrap_env(Term::from(ConceptDef { id, vars, defs })), self.is_normal_mode()))
     }
 
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()> {
@@ -306,21 +323,26 @@ impl ISA for Engine {
         let x = if let Some(x) = self.stack.pop() { x } else {
             return Err(OperationError::new("Nothing to unbind"));
         }.unwrap_closure();
-        let val = if let Concept { val, .. } = x.get_enum() { val } else {
+        if let Concept { id, vars, defs, loop_ptr } = x.get_enum() {
+            let mut nxt = loop_ptr + 1;
+            if nxt == defs.len() { nxt += 1 }
+            self.stack.push(Term::from(Concept {
+                id: *id,
+                vars: vars.clone(),
+                defs: defs.clone(),
+                loop_ptr: nxt,
+            }));
+            self.stack.push(defs[*loop_ptr].clone());
+            Ok(())
+        } else {
             return Err(OperationError::new("Only concepts can be unbinded"));
-        };
-        let (cur, rest) = if let Some(v) = val { v } else {
-            return Err(OperationError::new("Concept is already empty"));
-        };
-        self.stack.push(rest.clone());
-        self.stack.push(cur.clone());
-        Ok(())
+        }
     }
 }
 
 impl Engine {
     pub fn new() -> Engine {
-        Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, assume_height: None }
+        Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
     }
     fn wrap_env(&self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
@@ -333,6 +355,42 @@ impl Engine {
         ans
     }
     fn is_normal_mode(&self) -> bool {
-        matches!(self.assume_height, None)
+        self.num_assum == 0
+    }
+
+    fn deep_eq(&mut self, a: &Term, b: &Term) -> bool {
+        if Term::shallow_eq(a, b) { return true }
+        let a = a.unwrap_closure();
+        let b = b.unwrap_closure();
+        assert!(a.is_movable() && b.is_movable());
+        match (a.get_enum(), b.get_enum()) {
+            (SymbolRef(a), SymbolRef(b)) => a == b,
+            (Forall{var: v1, expr: e1}, Forall{var: v2, expr: e2}) => {
+                if v1 == v2 && Term::shallow_eq(e1, e2) {
+                    true
+                } else {
+                    self.num_symbols += 1;
+                    let sym = Term::from(SymbolRef(self.num_symbols));
+                    let env1 = Env::new().add(*v1, sym.clone());
+                    let env2 = Env::new().add(*v2, sym);
+                    self.deep_eq(
+                        &Term::from(Closure(e1.clone(), env1)),
+                        &Term::from(Closure(e2.clone(), env2)),
+                    )
+                }
+            },
+            (Imply(p1, q1), Imply(p2, q2)) => {
+                self.deep_eq(p1, p2) && self.deep_eq(q1, q2)
+            },
+            (
+                Concept { id: i1, vars: v1, ..},
+                Concept { id: i2, vars: v2, ..},
+            ) => if i1 != i2 {
+                false
+            } else {
+                iter::zip(v1.iter(), v2.iter()).all(|(a, b)| self.deep_eq(a, b))
+            }
+            _ => false,
+        }
     }
 }
