@@ -8,7 +8,7 @@ mod pkg;
 fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
     let mut line_count: usize = 0;
     use regex::Regex;
-    let word_gap = Regex::new(r"\b").unwrap();
+    let word_gap = Regex::new(r"\s+").unwrap();
     let empty_string = Regex::new(r"^\s*$").unwrap();
     let mut pkgdir = pkg::PkgDir::new();
     for raw_line in input.lines() {
@@ -18,7 +18,7 @@ fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
         };
         let tokens: Vec<_> = word_gap
             .split(&line)
-            .filter(|x| empty_string.is_match(x))
+            .filter(|x| !empty_string.is_match(x))
             .take_while(|x| !x.starts_with('#'))
             .collect();
         let cmd = if let Some(v) = tokens.first() { v } else { continue };
@@ -94,6 +94,7 @@ fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
                 result = eng.refer(a.clone(), *b);
             }
             s => {
+                println!("{:?}", tokens);
                 panic!("Undefined command: {}", s);
             },
         }
@@ -101,6 +102,7 @@ fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
             panic!("Error occurred on line {}: {:?}", line_count, v);
         }
     }
+    println!("Examination succeeded.");
 }
 
 fn main() {

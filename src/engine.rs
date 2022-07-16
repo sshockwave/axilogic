@@ -120,11 +120,8 @@ impl ISA for Engine {
         let el = if let Some(v) = self.stack.pop() { v } else {
             return Err(OperationError::new("Cannot pop on empty stack"));
         };
-        if !el.is_movable() {
-            return Err(OperationError::new("Stack top is not a movable element"));
-        }
         if let Some(v) = self.assume_height {
-            if self.stack.len() < v {
+            if self.stack.len() <= v {
                 self.assume_height = None;
             }
         }
@@ -203,10 +200,10 @@ impl ISA for Engine {
         if l < 2 {
             return Err(OperationError::new("Stack needs to contain at least two elements"));
         }
-        let p = self.stack.pop().unwrap();
         let q = self.stack.pop().unwrap();
+        let p = self.stack.pop().unwrap();
         if !q.is_movable() {
-            return Err(OperationError::new("Cannot use movable element as condition"));
+            return Err(OperationError::new("Cannot use non-movable element as condition"));
         }
         if let Assumption(expr) = p.get_enum() {
             self.stack.push(Term::from(Imply(expr.clone(), q)));

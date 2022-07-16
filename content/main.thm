@@ -1,0 +1,31 @@
+# not
+symbol
+    express
+    concept not
+    pop
+
+# infer: A -> B
+symbol # A
+    symbol # B
+        express
+        concept infer
+        pop
+    pop
+
+# Formal statement calculus-L
+express
+symbol # A
+    symbol # B
+        refer infer # A->(B->A)
+            push 0 # A
+                apply
+            refer infer # B->A
+                push 1
+                    apply
+                push 0
+                    apply
+                apply
+            forall
+        forall
+    export fo_l1
+    pop
