@@ -86,10 +86,6 @@ impl Term {
             _ => false,
         }
     }
-    fn deep_eq(a: &Term, b: &Term) -> bool {
-        // TODO: implement strong deep equal
-        Self::shallow_eq(a, b)
-    }
 }
 
 impl From<TermEnum> for Term {
@@ -182,13 +178,13 @@ impl ISA for Engine {
         if !param.is_movable() {
             return Err(OperationError::new("Cannot use non-movable element as parameter"));
         }
-        self.stack.push(match func.unwrap_closure().get_enum() {
+        let el = match func.unwrap_closure().get_enum() {
             Forall { var, expr } => Term::from(Closure (
                 // TODO: boost by testing whether underlying expr is a closure
                 expr.clone(),
                 Env::new().add(*var, param),
             )),
-            Imply(p, q) => if Term::deep_eq(&param, p) {
+            Imply(p, q) => if self.deep_eq(&param, p) {
                 q.clone()
             } else {
                 return Err(OperationError::new("Not deep equal when applying antecedent"));
@@ -196,7 +192,8 @@ impl ISA for Engine {
             _ => {
                 return Err(OperationError::new("Only implication or function is appliable"));
             }
-        });
+        };
+        self.stack.push(el);
         Ok(())
     }
 
@@ -324,5 +321,34 @@ impl Engine {
     }
     fn is_normal_mode(&self) -> bool {
         self.num_assum == 0
+    }
+
+    fn deep_eq(&mut self, a: &Term, b: &Term) -> bool {
+        if Term::shallow_eq(a, b) { return true }
+        let a = a.unwrap_closure();
+        let b = b.unwrap_closure();
+        assert!(a.is_movable() && b.is_movable());
+        match (a.get_enum(), b.get_enum()) {
+            (SymbolRef(a), SymbolRef(b)) => a == b,
+            (Forall{var: v1, expr: e1}, Forall{var: v2, expr: e2}) => {
+                if v1 == v2 && Term::shallow_eq(e1, e2) {
+                    true
+                } else {
+                    self.num_symbols += 1;
+                    let sym = Term::from(SymbolRef(self.num_symbols));
+                    let env1 = Env::new().add(*v1, sym.clone());
+                    let env2 = Env::new().add(*v2, sym);
+                    self.deep_eq(
+                        &Term::from(Closure(e1.clone(), env1)),
+                        &Term::from(Closure(e2.clone(), env2)),
+                    )
+                }
+            },
+            (Imply(p1, q1), Imply(p2, q2)) => {
+                self.deep_eq(p1, p2) && self.deep_eq(q1, q2)
+            },
+            // TODO: concept
+            _ => false,
+        }
     }
 }
