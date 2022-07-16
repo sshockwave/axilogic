@@ -70,12 +70,8 @@ express
                 apply
                 export fo_l3 # (not(a)>not(b))>(b>a)
             pop
-            express
-                refer infer
-                    push 1 apply
-                    push 2 apply
-                assume
-                express push 1 assume
+            express refer infer push 1 apply push 2 apply assume # assume a>b
+                express push 1 assume # assume a
                     push 1
                         export mp
                     pop
@@ -89,6 +85,33 @@ express
                 express refer fo_l2 assume
                     express refer fo_l3 assume
                         concept prop_logic
+                    pop
+                pop
+            pop
+        pop
+    pop
+pop
+
+# Hypothetical Syllogism
+express refer prop_logic assume
+    symbol # a: 1
+        symbol # b: 2
+            symbol #c: 3
+                express refer infer push 1 apply push 2 apply assume # a>b: 4
+                    express refer infer push 2 apply push 3 apply assume # b>c: 5
+                        push 0 # prop_logic
+                            unbind pop # double_neg
+                            unbind swap # mp: 6
+                                unbind swap # fo_l1: 7
+                                    unbind swap pop # fo_l2: 8
+                                    push 6 push 5 apply push 1 apply # (b>c)>(a>(b>c))
+                                        push 5 apply # a>(b>c)
+                                    apply # (a>b)>(a>c)
+                                    push 7 swap apply # a>c
+                                    export hs
+                                pop
+                            pop
+                        pop
                     pop
                 pop
             pop

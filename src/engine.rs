@@ -67,7 +67,17 @@ impl Term {
                     }
                     Self::unwrap_closure(&Term::from(Closure(expr.clone(), new_env)))
                 },
-                Concept {..} => expr.clone(),
+                Concept { id, vars, defs, loop_ptr} => {
+                    let mut vars2 = Vec::with_capacity(vars.len());
+                    let mut defs2 = Vec::with_capacity(defs.len());
+                    for k in vars {
+                        vars2.push(Term::from(Closure(k.clone(), env.clone())));
+                    }
+                    for t in defs {
+                        defs2.push(Term::from(Closure(t.clone(), env.clone())));
+                    }
+                    Term::from(Concept { id: *id, vars: vars2, defs: defs2, loop_ptr: *loop_ptr })
+                }
                 ConceptDef { id, vars, defs } => {
                     let mut vars2 = Vec::with_capacity(vars.len());
                     let mut defs2 = Vec::with_capacity(defs.len());
@@ -297,7 +307,13 @@ impl ISA for Engine {
                 _ => (),
             }
         }
-        Ok((self.wrap_env(Term::from(ConceptDef { id, vars, defs })), self.is_normal_mode()))
+        if vars.is_empty() {
+            Ok((Term::from(Concept { id, vars: Vec::new(), defs, loop_ptr: 0 }), self.is_normal_mode()))
+        } else if self.is_normal_mode() {
+            Ok((self.wrap_env(Term::from(ConceptDef { id, vars, defs })), true))
+        } else {
+            Ok((self.wrap_vars_env(Term::from(ConceptDef { id, vars, defs })), false))
+        }
     }
 
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()> {
@@ -332,6 +348,15 @@ impl ISA for Engine {
 impl Engine {
     pub fn new() -> Engine {
         Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
+    }
+    fn wrap_vars_env(&self, mut ans: Term) -> Term {
+        for t in self.stack.iter().rev() {
+            match t.get_enum() {
+                Symbol(var) => ans = Term::from(Forall { var: *var, expr: ans }),
+                _ => (),
+            }
+        }
+        ans
     }
     fn wrap_env(&self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
