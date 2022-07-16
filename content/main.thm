@@ -1,68 +1,74 @@
 # not
-symbol
-    express
+express # definition
+    symbol
         concept not
     pop
 pop
-symbol # a
-    express
-        refer not
-            refer not
-                push 0 apply
-            apply
-            assume # not(not(a))
+express # axiom
+    symbol # a
         express
-            push 0
+            refer not
+                refer not
+                    push 1 apply
+                apply
+            assume # not(not(a))
+            push 1
                 export double_neg
             pop
         pop
     pop
 pop
 
-# infer: A -> B
-symbol # A
-    symbol # B
-        express
-            concept infer
-        pop
-    pop
-pop
-
 # Formal statement calculus-L
-symbol # A
-    symbol # B
-        express
-            refer infer # A->(B->A)
-                push 0 apply # A
+# infer: A -> B
+express
+    symbol # a
+        symbol # b
+            concept infer # a->b
+            refer infer # a>(b>a)
+                push 1 apply
                 refer infer # B->A
+                    push 2 apply
                     push 1 apply
-                    push 0 apply
                 apply
                 export fo_l1 # \a\b a>(b>a)
             pop
-        pop
-        symbol # c
-            express
+            symbol # c
                 refer infer # (a>(b>c))>((a>b)>(a>c))
                     refer infer # a>(b>c)
-                        push 0 apply
+                        push 1 apply
                         refer infer # b>c
-                            push 1 apply
                             push 2 apply
+                            push 3 apply
                         apply
                     apply
                     refer infer
                         refer infer # a>b
-                            push 0 apply
                             push 1 apply
+                            push 2 apply
                         apply
                         refer infer # a>c
-                            push 0 apply
-                            push 2 apply
+                            push 1 apply
+                            push 3 apply
                         apply
                     apply
                     export fo_l2 # \a\b\c (a->(b->c))->((a->b)->(a->c))
                 pop
+            pop
+            refer infer
+                refer infer # not(a)>not(b)
+                    refer not
+                        push 1 apply
+                    apply
+                    refer not
+                        push 2 apply
+                    apply
+                apply
+                refer infer # b>a
+                    push 2 apply
+                    push 1 apply
+                apply
+                export fo_l3 # (not(a)>not(b))>(b>a)
             pop
         pop
     pop
