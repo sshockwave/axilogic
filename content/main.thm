@@ -1,31 +1,80 @@
 # not
 symbol
     express
-    concept not
+        concept not
+        pop
+    pop
+symbol # a
+    express
+        refer not
+            refer not
+                push 0
+                    apply
+                apply
+            assume # not(not(a))
+        express
+            push 0
+                export double_neg
+                pop
+            pop
+        pop
     pop
 
 # infer: A -> B
 symbol # A
     symbol # B
         express
-        concept infer
+            concept infer
+            pop
         pop
     pop
 
 # Formal statement calculus-L
-express
 symbol # A
     symbol # B
-        refer infer # A->(B->A)
-            push 0 # A
-                apply
-            refer infer # B->A
-                push 1
+        express
+            refer infer # A->(B->A)
+                push 0 # A
                     apply
-                push 0
+                refer infer # B->A
+                    push 1
+                        apply
+                    push 0
+                        apply
                     apply
-                apply
-            forall
-        forall
-    export fo_l1
+                export fo_l1 # \a\b a>(b>a)
+                pop
+            pop
+        symbol # c
+            express
+                refer infer # (a>(b>c))>((a>b)>(a>c))
+                    refer infer # a>(b>c)
+                        push 0
+                            apply
+                        refer infer # b>c
+                            push 1
+                                apply
+                            push 2
+                                apply
+                            apply
+                        apply
+                    refer infer
+                        refer infer # a>b
+                            push 0
+                                apply
+                            push 1
+                                apply
+                            apply
+                        refer infer # a>c
+                            push 0
+                                apply
+                            push 2
+                                apply
+                            apply
+                        apply
+                    export fo_l2 # \a\b\c (a->(b->c))->((a->b)->(a->c))
+                    pop
+                pop
+            pop
+        pop
     pop

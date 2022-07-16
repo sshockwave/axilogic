@@ -8,13 +8,14 @@ pub struct Engine {
     stack: Vec<Term>,
     num_symbols: usize,
     num_concepts: usize,
-    assume_height: Option<usize>, // stack[assume_height:] is falsy
+    num_assum: usize,
 }
 
 pub enum TermEnum {
     Symbol(usize),
     SymbolRef(usize),
     Assumption(Term),
+    Express,
     Forall {
         var: usize,
         expr: Term,
@@ -34,14 +35,14 @@ pub struct Term(Rc<TermEnum>);
 impl Term {
     fn is_movable(&self) -> bool {
         match self.0.as_ref() {
-            Symbol(_) | Assumption(_) => false,
+            Symbol(_) | Assumption(_) | Express => false,
             _ => true,
         }
     }
     fn unwrap_closure(&self) -> Self {
         if let Closure(expr, env) = self.0.as_ref() {
             match expr.0.as_ref() {
-                Symbol(_) | Assumption(_) => panic!("Closure should not contain non-movable terms"),
+                Symbol(_) | Assumption(_) | Express => panic!("Closure should not contain non-movable terms"),
                 SymbolRef(id) => env.get(id).map(Self::unwrap_closure).unwrap_or_else(|| expr.clone()),
                 Forall { var, expr } => Self::from(Forall {
                     var: var.clone(),
@@ -81,6 +82,7 @@ impl Term {
         match (a.get_enum(), b.get_enum()) {
             (Symbol(a), Symbol(b)) => a == b,
             (SymbolRef(a), SymbolRef(b)) => a == b,
+            (Express, Express) => true,
             _ => false,
         }
     }
@@ -108,7 +110,11 @@ impl ISA for Engine {
         }
         let el = self.stack[idx].clone();
         let new_el = match el.get_enum() {
-            Symbol(d) => Term::from(SymbolRef(d.clone())),
+            Symbol(d) => if self.is_normal_mode() {
+                return Err(OperationError::new("symbols cannot be used in normal mode"));
+            } else {
+                Term::from(SymbolRef(d.clone()))
+            },
             Assumption(v) => v.clone(),
             _ => el.clone(),
         };
@@ -120,10 +126,9 @@ impl ISA for Engine {
         let el = if let Some(v) = self.stack.pop() { v } else {
             return Err(OperationError::new("Cannot pop on empty stack"));
         };
-        if let Some(v) = self.assume_height {
-            if self.stack.len() <= v {
-                self.assume_height = None;
-            }
+        if let Express = el.0.as_ref() {
+            assert!(self.num_assum > 0);
+            self.num_assum -= 1;
         }
         Ok(())
     }
@@ -156,7 +161,7 @@ impl ISA for Engine {
         let expr = self.stack.pop().unwrap();
         let sym = self.stack.pop().unwrap();
         if !expr.is_movable() {
-            return Err(OperationError::new("Cannot use movable element as expression"));
+            return Err(OperationError::new("Cannot use non-movable element as expression"));
         }
         self.stack.push(match sym.get_enum() {
             Symbol(d) => Term::from(Forall { var: *d, expr }),
@@ -175,7 +180,7 @@ impl ISA for Engine {
         let param = self.stack.pop().unwrap();
         let func = self.stack.pop().unwrap();
         if !param.is_movable() {
-            return Err(OperationError::new("Cannot use movable element as parameter"));
+            return Err(OperationError::new("Cannot use non-movable element as parameter"));
         }
         self.stack.push(match func.unwrap_closure().get_enum() {
             Forall { var, expr } => Term::from(Closure (
@@ -214,30 +219,27 @@ impl ISA for Engine {
     }
 
     fn express(&mut self) -> Result<()> {
-        if let Some(_) = self.assume_height {
-            return Err(OperationError::new("Already in assumption mode"));
-        }
-        self.assume_height = Some(self.stack.len());
+        self.stack.push(Term::from(Express));
+        self.num_assum += 1;
         Ok(())
     }
 
     fn assume(&mut self) -> Result<()> {
-        if let Some(x) = self.stack.pop() {
-            if !x.is_movable() {
-                return Err(OperationError::new("Non-movable expression cannot be assumed"));
-            }
-            if let Some(h) = self.assume_height {
-                if self.stack.len() == h {
-                    self.assume_height = None;
-                }
-                self.stack.push(Term::from(Assumption(x)));
-                Ok(())
-            } else {
-                Err(OperationError::new("Cannot assume in normal mode"))
-            }
-        } else {
-            Err(OperationError::new("Nothing to assume"))
+        let x = if let Some(x) = self.stack.pop() { x } else {
+            return Err(OperationError::new("Nothing to assume"));
+        };
+        if !x.is_movable() {
+            return Err(OperationError::new("Non-movable expression cannot be assumed"));
         }
+        let e = if let Some(v) = self.stack.pop() { v } else {
+            return Err(OperationError::new("Missing express"));
+        };
+        if let Express = e.get_enum() { } else {
+            return Err(OperationError::new("Assumption should be made on an express"));
+        }
+        self.stack.push(Term::from(Assumption(x)));
+        self.num_assum -= 1;
+        Ok(())
     }
 
     fn trust(&mut self) -> Result<()> {
@@ -308,7 +310,7 @@ impl ISA for Engine {
 
 impl Engine {
     pub fn new() -> Engine {
-        Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, assume_height: None }
+        Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
     }
     fn wrap_env(&self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
@@ -321,6 +323,6 @@ impl Engine {
         ans
     }
     fn is_normal_mode(&self) -> bool {
-        matches!(self.assume_height, None)
+        self.num_assum == 0
     }
 }
