@@ -106,7 +106,7 @@ impl Term {
 
 impl fmt::Display for Term {
     fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
-        unimplemented!();
+        todo!();
     }
 }
 
@@ -120,7 +120,7 @@ type Result<T> = std::result::Result<T, OperationError>;
 
 impl fmt::Display for Engine {
     fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
-        unimplemented!();
+        todo!();
     }
 }
 
