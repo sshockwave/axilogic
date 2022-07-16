@@ -310,6 +310,9 @@ impl ISA for Engine {
 }
 
 impl Engine {
+    pub fn new() -> Engine {
+        Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, assume_height: None }
+    }
     fn wrap_env(&self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
             match t.get_enum() {

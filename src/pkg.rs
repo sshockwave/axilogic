@@ -6,7 +6,7 @@ pub struct PkgDir<T> {
 }
 
 impl<T> PkgDir<T> {
-    const parent_dir: &'static str = "super";
+    pub const parent_dir: &'static str = "super";
     pub fn new() -> Self {
         PkgDir { val: None, root: HashMap::new() }
     }
@@ -48,9 +48,9 @@ impl<T> PkgDir<T> {
         }
         ptr.val = Some(item);
     }
-    pub fn get<'a>(&'a self, path: String) -> Option<&'a T> {
+    pub fn get<'a>(&'a self, path: &str) -> Option<&'a T> {
         let mut ptr = self;
-        for s in Self::to_normal_parts(Self::to_iter(&path)) {
+        for s in Self::to_normal_parts(Self::to_iter(path)) {
             if s != "" {
                 ptr = if let Some(v) = ptr.root.get(s) { v } else {
                     return None
