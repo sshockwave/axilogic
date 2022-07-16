@@ -1,4 +1,5 @@
 use std::{rc::Rc, vec::Vec};
+use std::fmt;
 
 use super::{ds, isa::{ISA, OperationError}};
 
@@ -90,6 +91,12 @@ impl Term {
     }
 }
 
+impl fmt::Display for Term {
+    fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!();
+    }
+}
+
 impl From<TermEnum> for Term {
     fn from(v: TermEnum) -> Term {
         Term(Rc::new(v))
@@ -98,6 +105,11 @@ impl From<TermEnum> for Term {
 
 type Result<T> = std::result::Result<T, OperationError>;
 
+impl fmt::Display for Engine {
+    fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!();
+    }
+}
 
 impl ISA for Engine {
     type Term = Term;

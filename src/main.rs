@@ -1,11 +1,13 @@
 use std::{io::{BufRead, stdin}, vec::Vec};
+use std::io::BufReader;
+use std::fmt;
 
 mod isa;
 mod engine;
 mod ds;
 mod pkg;
 
-fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
+fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
     let mut line_count: usize = 0;
     use regex::Regex;
     let word_gap = Regex::new(r"\s+").unwrap();
@@ -101,10 +103,17 @@ fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
         if let Err(v) = result {
             panic!("Error occurred on line {}: {:?}", line_count, v);
         }
+        println!("{eng}");
     }
     println!("Examination succeeded.");
 }
 
 fn main() {
-    run(&mut engine::Engine::new(), stdin().lock());
+    // run(&mut engine::Engine::new(), stdin().lock());
+    use std::fs::File;
+    let f=match File::open("content/main.thm"){
+        Ok(e) => e,
+        Err(_) => panic!("files error")
+    };
+    run(&mut engine::Engine::new(),BufReader::new(f))
 }
