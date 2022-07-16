@@ -6,7 +6,7 @@ pub struct PkgDir<T> {
 }
 
 impl<T> PkgDir<T> {
-    pub const parent_dir: &'static str = "super";
+    pub const PARENT_DIR: &'static str = "super";
     pub fn new() -> Self {
         PkgDir { val: None, root: HashMap::new() }
     }
@@ -16,9 +16,9 @@ impl<T> PkgDir<T> {
     fn to_normal_parts<'a, S: Iterator<Item=&'a str>>(iter: S) -> Vec<&'a str> {
         let mut ans = Vec::new();
         for s in iter {
-            if s == Self::parent_dir {
+            if s == Self::PARENT_DIR {
                 if let Some(top) = ans.last() {
-                    if top != &Self::parent_dir {
+                    if top != &Self::PARENT_DIR {
                         ans.pop();
                         continue;
                     }
