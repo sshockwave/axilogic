@@ -1,4 +1,4 @@
-use std::{rc::Rc, vec::Vec};
+use std::{rc::Rc, vec::Vec, iter};
 
 use super::{ds, isa::{ISA, OperationError}};
 
@@ -21,9 +21,16 @@ pub enum TermEnum {
         expr: Term,
     },
     Imply(Term, Term),
-    Concept {
+    ConceptDef{
         id: usize,
-        val: Option<(Term, Term)>, // (cur_val, rest)
+        vars: Vec<usize>,
+        defs: Vec<Term>,
+    },
+    Concept{
+        id: usize,
+        vars: Vec<Term>,
+        defs: Vec<Term>,
+        loop_ptr: usize,
     },
     Closure(Term, Env),
 }
@@ -35,7 +42,7 @@ pub struct Term(Rc<TermEnum>);
 impl Term {
     fn is_movable(&self) -> bool {
         match self.0.as_ref() {
-            Symbol(_) | Assumption(_) | Express => false,
+            Symbol(_) | Assumption(_) | Express | ConceptDef {..} => false,
             _ => true,
         }
     }
@@ -60,13 +67,21 @@ impl Term {
                     }
                     Self::unwrap_closure(&Term::from(Closure(expr.clone(), new_env)))
                 },
-                Concept { id, val} => Term::from(Concept {
-                    id: *id,
-                    val: val.as_ref().map(|x| (
-                        Term::from(Closure(x.0.clone(), env.clone())),
-                        Term::from(Closure(x.1.clone(), env.clone())),
-                    )),
-                }),
+                Concept {..} => expr.clone(),
+                ConceptDef { id, vars, defs } => {
+                    let mut vars2 = Vec::with_capacity(vars.len());
+                    let mut defs2 = Vec::with_capacity(defs.len());
+                    let mut env2 = Env::new();
+                    for k in vars {
+                        let v = env.get(k).unwrap();
+                        vars2.push(v.clone());
+                        env2 = env2.add(*k, v.clone());
+                    }
+                    for t in defs {
+                        defs2.push(Term::from(Closure(t.clone(), env2.clone())));
+                    }
+                    Term::from(Concept { id: *id, loop_ptr: 0, vars: vars2, defs: defs2 })
+                }
             }
         } else {
             self.clone()
@@ -83,6 +98,7 @@ impl Term {
             (Symbol(a), Symbol(b)) => a == b,
             (SymbolRef(a), SymbolRef(b)) => a == b,
             (Express, Express) => true,
+            (ConceptDef{id: id1, ..}, ConceptDef{id: id2, ..}) => id1 == id2,
             _ => false,
         }
     }
@@ -272,13 +288,16 @@ impl ISA for Engine {
     fn concept(&mut self) -> Result<(Self::Term, bool)> {
         self.num_concepts += 1;
         let id = self.num_concepts;
-        let mut val = None;
+        let mut vars = Vec::new();
+        let mut defs = Vec::new();
         for t in self.stack.iter() {
-            if let Assumption(p) =  t.get_enum() {
-                val = Some((p.clone(), Term::from(Concept { id, val })));
+            match t.get_enum() {
+                Assumption(t) => defs.push(t.clone()),
+                Symbol(x) => vars.push(*x),
+                _ => (),
             }
         }
-        Ok((self.wrap_env(Term::from(Concept{ id, val })), self.is_normal_mode()))
+        Ok((self.wrap_env(Term::from(ConceptDef { id, vars, defs })), self.is_normal_mode()))
     }
 
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()> {
@@ -293,15 +312,20 @@ impl ISA for Engine {
         let x = if let Some(x) = self.stack.pop() { x } else {
             return Err(OperationError::new("Nothing to unbind"));
         }.unwrap_closure();
-        let val = if let Concept { val, .. } = x.get_enum() { val } else {
+        if let Concept { id, vars, defs, loop_ptr } = x.get_enum() {
+            let mut nxt = loop_ptr + 1;
+            if nxt == defs.len() { nxt += 1 }
+            self.stack.push(Term::from(Concept {
+                id: *id,
+                vars: vars.clone(),
+                defs: defs.clone(),
+                loop_ptr: nxt,
+            }));
+            self.stack.push(defs[*loop_ptr].clone());
+            Ok(())
+        } else {
             return Err(OperationError::new("Only concepts can be unbinded"));
-        };
-        let (cur, rest) = if let Some(v) = val { v } else {
-            return Err(OperationError::new("Concept is already empty"));
-        };
-        self.stack.push(rest.clone());
-        self.stack.push(cur.clone());
-        Ok(())
+        }
     }
 }
 
@@ -347,7 +371,14 @@ impl Engine {
             (Imply(p1, q1), Imply(p2, q2)) => {
                 self.deep_eq(p1, p2) && self.deep_eq(q1, q2)
             },
-            // TODO: concept
+            (
+                Concept { id: i1, vars: v1, ..},
+                Concept { id: i2, vars: v2, ..},
+            ) => if i1 != i2 {
+                false
+            } else {
+                iter::zip(v1.iter(), v2.iter()).all(|(a, b)| self.deep_eq(a, b))
+            }
             _ => false,
         }
     }
