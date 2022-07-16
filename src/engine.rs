@@ -117,15 +117,18 @@ impl ISA for Engine {
     }
 
     fn pop(&mut self) -> Result<()> {
-        let el = self.stack.pop();
-        match el {
-            Some(v) => if v.is_movable() {
-                Ok(())
-            } else {
-                Err(OperationError::new("Stack top is not a movable element"))
-            },
-            None => Err(OperationError::new("Cannot pop on empty stack")),
+        let el = if let Some(v) = self.stack.pop() { v } else {
+            return Err(OperationError::new("Cannot pop on empty stack"));
+        };
+        if !el.is_movable() {
+            return Err(OperationError::new("Stack top is not a movable element"));
         }
+        if let Some(v) = self.assume_height {
+            if self.stack.len() < v {
+                self.assume_height = None;
+            }
+        }
+        Ok(())
     }
 
     fn swap(&mut self) -> Result<()> {
