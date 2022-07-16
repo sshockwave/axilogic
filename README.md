@@ -4,7 +4,7 @@
 ### Overview
 ```bash
 # Stack Operations
-push <n> # Push stack[-n] to top
+push <n> # Push stack[n] to top
 swap # Swap the two upper most elements on the stack
 pop # Pop element from stack
 
