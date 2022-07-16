@@ -1,105 +1,89 @@
-use std::{io::{BufRead, stdin}, vec::Vec};
+use std::io::{BufRead, stdin};
 
 mod isa;
 mod engine;
 mod ds;
 mod pkg;
+mod scan;
 
 fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
-    let mut line_count: usize = 0;
-    use regex::Regex;
-    let word_gap = Regex::new(r"\s+").unwrap();
-    let empty_string = Regex::new(r"^\s*$").unwrap();
+    let mut input = scan::TokenScanner::new(input);
     let mut pkgdir = pkg::PkgDir::new();
-    for raw_line in input.lines() {
-        line_count += 1;
-        let line = if let Ok(v) = raw_line { v } else {
-            panic!("Error occurred while reading line {}", line_count);
+    loop {
+        let cmd = if let Some(v) = input.next() { v } else { break };
+        let cmd = match cmd {
+            Ok(v) => v,
+            Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
         };
-        let tokens: Vec<_> = word_gap
-            .split(&line)
-            .filter(|x| !empty_string.is_match(x))
-            .take_while(|x| !x.starts_with('#'))
-            .collect();
-        let cmd = if let Some(v) = tokens.first() { v } else { continue };
-        let mut result = Ok(());
-        match *cmd {
+        let result = match cmd.as_str() {
             "push" => {
-                assert_eq!(tokens.len(), 2, "Number of parameter should be exactly 1 on line {}", line_count);
-                let num_s = tokens[1];
-                let n = if let Ok(v) = num_s.parse() { v } else {
-                    panic!("Integer parse failure on line {}", line_count);
+                let num_s = if let Some(v) = input.next() { v } else {
+                    panic!("Expected parameter for push on line {}", input.get_line_no());
                 };
-                result = eng.push(n);
+                let num_s = match num_s {
+                    Ok(v) => v,
+                    Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
+                };
+                let n = if let Ok(v) = num_s.parse() { v } else {
+                    panic!("Integer '{}' parse failure on line {}", num_s, input.get_line_no());
+                };
+                eng.push(n)
             }
-            "swap" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.swap();
-            }
-            "pop" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.pop();
-            }
-            "symbol" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.symbol();
-            }
-            "forall" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.forall();
-            }
-            "apply" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.apply();
-            }
-            "express" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.express();
-            }
-            "assume" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.assume();
-            }
-            "abstract" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.abs();
-            }
-            "trust" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.trust();
-            }
-            "unbind" => {
-                assert_eq!(tokens.len(), 1, "No params should be on line {}", line_count);
-                result = eng.unbind();
-            }
+            "swap" => eng.swap(),
+            "pop" => eng.pop(),
+            "symbol" => eng.symbol(),
+            "forall" => eng.forall(),
+            "apply" => eng.apply(),
+            "express" => eng.express(),
+            "assume" => eng.assume(),
+            "abstract" => eng.abs(),
+            "trust" => eng.trust(),
+            "unbind" => eng.unbind(),
             "export" => {
-                assert_eq!(tokens.len(), 2, "No params should be on line {}", line_count);
-                let path = tokens[1];
-                result = eng.export().map(
+                let path = if let Some(v) = input.next() { v } else {
+                    panic!("Expected parameter for export on line {}", input.get_line_no());
+                };
+                let path = match path {
+                    Ok(v) => v,
+                    Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
+                };
+                // TODO: check name validity
+                eng.export().map(
                     |x| pkgdir.set(path.to_string(), x)
-                );
+                )
             }
             "concept" => {
-                assert_eq!(tokens.len(), 2, "No params should be on line {}", line_count);
-                let path = tokens[1];
-                result = eng.concept().map(
+                let path = if let Some(v) = input.next() { v } else {
+                    panic!("Expected parameter for export on line {}", input.get_line_no());
+                };
+                let path = match path {
+                    Ok(v) => v,
+                    Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
+                };
+                // TODO: check name validity
+                eng.concept().map(
                     |x| pkgdir.set(path.to_string(), x)
-                );
+                )
             }
             "refer" => {
-                let path = tokens[1..].join(":");
-                let (a, b) = if let Some(v) = pkgdir.get(&path) { v } else {
-                    panic!("Name {} does not exist on line {}", path, line_count);
+                let path = if let Some(v) = input.next() { v } else {
+                    panic!("Expected parameter for export on line {}", input.get_line_no());
                 };
-                result = eng.refer(a.clone(), *b);
+                let path = match path {
+                    Ok(v) => v,
+                    Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
+                };
+                let (a, b) = if let Some(v) = pkgdir.get(&path) { v } else {
+                    panic!("Name {} does not exist on line {}", path, input.get_line_no());
+                };
+                eng.refer(a.clone(), *b)
             }
             s => {
-                println!("{:?}", tokens);
                 panic!("Undefined command: {}", s);
             },
-        }
+        };
         if let Err(v) = result {
-            panic!("Error occurred on line {}: {:?}", line_count, v);
+            panic!("Error occurred on line {}: {:?}", input.get_line_no(), v);
         }
     }
     println!("Examination succeeded.");
