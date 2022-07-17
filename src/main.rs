@@ -85,11 +85,10 @@ fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
         if let Err(v) = result {
             panic!("Error occurred on line {}: {:?}", input.get_line_no(), v);
         }
-        println!("{eng}");
     }
     println!("Examination succeeded.");
 }
 
 fn main() {
-     run(&mut engine::Engine::new(), stdin().lock());
+    run(&mut engine::Engine::new(), stdin().lock());
 }
