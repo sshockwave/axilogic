@@ -27,6 +27,7 @@ type Result<T> = std::result::Result<T, OperationError>;
 
 pub trait ISA {
     type Term: Clone;
+    fn print(&self) -> Result<()>;
     fn push(&mut self, n: isize) -> Result<()>;
     fn swap(&mut self) -> Result<()>;
     fn pop(&mut self) -> Result<()>;

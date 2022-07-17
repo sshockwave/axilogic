@@ -145,6 +145,10 @@ impl fmt::Display for Engine {
 
 impl ISA for Engine {
     type Term = Term;
+    fn print(&self) -> Result<()> {
+        println!("{}",self.stack[self.stack.len()-1]);
+        Ok(())
+    }
     fn push(&mut self, n: isize) -> Result<()> {
         let idx = if n < 0 { self.stack.len() - ((-n) as usize) } else { n as usize };
         if idx > self.stack.len() {
