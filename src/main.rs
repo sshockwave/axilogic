@@ -1,4 +1,4 @@
-use std::io::{BufRead, stdin};
+use std::{io::{BufRead, stdin, BufReader}, vec::Vec, fmt};
 
 mod isa;
 mod engine;
@@ -6,7 +6,7 @@ mod ds;
 mod pkg;
 mod scan;
 
-fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
+fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
     let mut input = scan::TokenScanner::new(input);
     let mut pkgdir = pkg::PkgDir::new();
     loop {
