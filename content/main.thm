@@ -139,3 +139,76 @@ express refer prop_logic assume
                                     # a>c
                                     export hs
 clear
+
+# Self-proving (a->a)
+express refer prop_logic assume
+    symbol # a: 1
+        push 0
+            unbind swap pop # double_neg
+            unbind # 2: mp
+                unbind # 3: fo_l1
+                    unbind pop # 4: fo_l2
+                    express push 1 apply
+                    express refer infer
+                        push 1 apply
+                        push 1 apply
+                    apply # a>a
+                    express push 1 apply
+                    # (a>((a>a)>a))>((a>(a>a))>(a>a))
+                    push 2 # mp
+                        express refer infer
+                            push 1 apply
+                            refer infer
+                                refer infer
+                                    push 1 apply
+                                    push 1 apply
+                                apply
+                                push 1 apply
+                            apply
+                        apply
+                        express refer infer
+                            refer infer
+                                push 1 apply
+                                refer infer
+                                    push 1 apply
+                                    push 1 apply
+                                apply
+                            apply
+                            refer infer
+                                push 1 apply
+                                push 1 apply
+                            apply
+                        apply
+                        swap
+                    apply
+                    # mp waiting for (a>((a>a)>a))
+                    push 3
+                        express push 1 apply
+                        express refer infer
+                            push 1 apply
+                            push 1 apply
+                        apply
+                    apply
+                    # ((a>(a>a))>(a>a))
+                    push 2 # mp
+                        express refer infer
+                            push 1 apply
+                            refer infer
+                                push 1 apply
+                                push 1 apply
+                            apply
+                        apply
+                        express refer infer
+                            push 1 apply
+                            push 1 apply
+                        apply
+                        swap
+                    apply
+                    # mp waiting for a>(a>a)
+                    push 3
+                        express push 1 apply
+                        express push 1 apply
+                    apply
+                    export self_prove
+                    print
+clear
