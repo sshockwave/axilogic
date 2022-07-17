@@ -100,14 +100,52 @@ express refer prop_logic assume
                 express refer infer push 1 apply push 2 apply assume # a>b: 4
                     express refer infer push 2 apply push 3 apply assume # b>c: 5
                         push 0 # prop_logic
-                            unbind pop # double_neg
-                            unbind swap # mp: 6
-                                unbind swap # fo_l1: 7
-                                    unbind swap pop # fo_l2: 8
-                                    push 6 push 5 apply push 1 apply # (b>c)>(a>(b>c))
-                                        push 5 apply # a>(b>c)
-                                    apply # (a>b)>(a>c)
-                                    push 7 swap apply # a>c
+                            unbind swap pop # double_neg
+                            unbind # mp: 6
+                                unbind # fo_l1: 7
+                                    unbind pop # fo_l2
+                                    push 6
+                                        express refer infer
+                                            push 1 apply
+                                            push 5 apply
+                                        apply
+                                        express refer infer
+                                            push 4 apply
+                                            refer infer
+                                                push 1 apply
+                                                push 3 apply
+                                            apply
+                                        apply
+                                        # mp: a>(b>c), (a>b)>(a>c)
+                                        swap # make fo_l2 on top
+                                    apply
+                                    # mp state 1, waiting for (a>(b>c))
+                                    push 6
+                                        push 5 apply
+                                        refer infer
+                                            express push 1 apply
+                                            push 5 apply
+                                        apply
+                                        # mp: (b>c)>(a>(b>c))
+                                        push 7
+                                            push 5 apply
+                                            express push 1 apply
+                                        apply
+                                        # mp: waiting for b>c
+                                        push 5 apply
+                                        # (a>(b>c))
+                                    apply
+                                    # (a>b)>(a>c)
+                                    push 6
+                                        push 4 apply
+                                        refer infer
+                                            push 1 apply
+                                            push 3 apply
+                                        apply
+                                        swap
+                                    apply
+                                    push 4 apply
+                                    # a>c
                                     export hs
                                 pop
                             pop

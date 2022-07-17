@@ -215,6 +215,16 @@ impl ISA for Engine {
             } else {
                 return Err(OperationError::new("Not deep equal when applying antecedent"));
             },
+            Express => {
+                let func = if let Some(v) = self.stack.pop() { v } else {
+                    return Err(OperationError::new("Function does not exist under express"));
+                }.unwrap_closure();
+                if let Forall { var, expr } = func.get_enum() {
+                    Term::from(Closure(expr.clone(), Env::new().add(*var, param)))
+                } else {
+                    return Err(OperationError::new("The element under express is not function"));
+                }
+            }
             _ => {
                 return Err(OperationError::new("Only implication or function is appliable"));
             }
