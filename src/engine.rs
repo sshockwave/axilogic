@@ -62,7 +62,7 @@ impl Term {
                     let mut new_env = env.clone();
                     // TODO: boost by merging the smaller one to the larger
                     for (k, v) in inner_env {
-                        new_env = new_env.add(k, v);
+                        new_env = new_env.add(k, Term::from(Closure(v, env.clone())));
                     }
                     Self::unwrap_closure(&Term::from(Closure(expr.clone(), new_env)))
                 },
@@ -100,7 +100,7 @@ impl Term {
 
 impl fmt::Display for Term {
     fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self.get_enum() {
+        let s = match self.unwrap_closure().get_enum() {
             Symbol(t) | SymbolRef(t) => t.to_string(),
             Assumption(t) => format!("({t})=>"),
             Express => "σ".to_string(),
@@ -108,7 +108,7 @@ impl fmt::Display for Term {
             Imply(t1, t2) => format!("({t1})=>({t2})"),
             Concept {id, vars, ..} =>
                 format!("Concept {id} [{}]", vec2str(vars)),
-            Closure(_, _) => format!("{}",self.unwrap_closure()),
+            Closure(..) => panic!(),
         };
         write!(f,"{s}")
     }
@@ -209,12 +209,11 @@ impl ISA for Engine {
         if !expr.is_movable() {
             return Err(OperationError::new("Cannot use non-movable element as expression"));
         }
-        self.stack.push(match sym.get_enum() {
-            Symbol(d) => Term::from(Forall { var: *d, expr }),
-            _ => {
-                return Err(OperationError::new("Cannot use movable element as expression"));
-            }
-        });
+        let id = if let Symbol(d) = sym.get_enum() { d } else {
+            return Err(OperationError::new("Cannot use movable element as variable"));
+        };
+        let func = make_forall(&mut self.num_symbols, *id, expr);
+        self.stack.push(func);
         Ok(())
     }
 
@@ -323,7 +322,8 @@ impl ISA for Engine {
             if !x.is_movable() {
                 return Err(OperationError::new("Only movable items can be exported"))
             }
-            Ok((self.wrap_env(x.clone()), self.is_normal_mode()))
+            let x = x.clone();
+            Ok((self.wrap_env(x), self.is_normal_mode()))
         } else {
             Err(OperationError::new("Nothing to export"))
         }
@@ -341,11 +341,7 @@ impl ISA for Engine {
                 _ => (),
             }
         }
-        if self.is_normal_mode() {
-            Ok((self.wrap_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), true))
-        } else {
-            Ok((self.wrap_vars_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), false))
-        }
+        Ok((self.wrap_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), true))
     }
 
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()> {
@@ -383,24 +379,30 @@ impl ISA for Engine {
     }
 }
 
+fn make_forall(num_symbols: &mut usize, old_id: usize, expr: Term) -> Term {
+    // New id is required to make a pure function
+    *num_symbols += 1;
+    let new_id = *num_symbols;
+    Term::from(Forall {
+        var: new_id,
+        expr: Term::from(Closure(
+            expr,
+            Env::new().add(old_id, Term::from(SymbolRef(new_id))),
+        )),
+    })
+}
+
 impl Engine {
     pub fn new() -> Engine {
         Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
     }
-    fn wrap_vars_env(&self, mut ans: Term) -> Term {
+    fn wrap_env(&mut self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
             match t.get_enum() {
-                Symbol(var) => ans = Term::from(Forall { var: *var, expr: ans }),
-                _ => (),
-            }
-        }
-        ans
-    }
-    fn wrap_env(&self, mut ans: Term) -> Term {
-        for t in self.stack.iter().rev() {
-            match t.get_enum() {
-                Symbol(var) => ans = Term::from(Forall { var: *var, expr: ans }),
-                Assumption(p) => ans = Term::from(Imply(p.clone(), ans)),
+                Symbol(var) => ans = make_forall(&mut self.num_symbols,*var, ans),
+                Assumption(p) => if self.is_normal_mode() {
+                    ans = Term::from(Imply(p.clone(), ans))
+                } else { continue }
                 _ => (),
             }
         }
