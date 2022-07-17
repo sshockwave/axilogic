@@ -129,8 +129,8 @@ impl fmt::Display for Term {
             ConceptDef {id, vars, ..} =>
                 format!("ConceptDef {id}: vars:[{}]", vec2str(vars)),
             Concept {id, vars, ..} =>
-                format!("Concept {id}: vars:[{}]", vec2str(vars)),
-            Closure(_, _) => format!("{}",self.clone().unwrap_closure()),
+                format!("Concept {id} [{}]", vec2str(vars)),
+            Closure(_, _) => format!("{}",self.unwrap_closure()),
         };
         write!(f,"{s}")
     }
@@ -156,7 +156,19 @@ impl fmt::Display for Engine {
 impl ISA for Engine {
     type Term = Term;
     fn print(&self) -> Result<()> {
-        println!("{}",self.stack[self.stack.len()-1]);
+        if self.is_normal_mode() {
+            print!("[Norm]");
+        } else {
+            print!("[Expr]");
+        }
+        match self.stack.last() {
+            Some(v) => {
+                println!("{}",v);
+            }
+            None => {
+                println!("Empty stack");
+            }
+        }
         Ok(())
     }
     fn push(&mut self, n: isize) -> Result<()> {
