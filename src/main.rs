@@ -39,6 +39,8 @@ fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
             "abstract" => eng.abs(),
             "trust" => eng.trust(),
             "unbind" => eng.unbind(),
+            "print" => eng.print(),
+            "clear" => eng.clear(),
             "export" => {
                 let path = if let Some(v) = input.next() { v } else {
                     panic!("Expected parameter for export on line {}", input.get_line_no());

@@ -31,6 +31,7 @@ pub trait ISA {
     fn push(&mut self, n: isize) -> Result<()>;
     fn swap(&mut self) -> Result<()>;
     fn pop(&mut self) -> Result<()>;
+    fn clear(&mut self) -> Result<()>;
     fn symbol(&mut self) -> Result<()>;
     fn forall(&mut self) -> Result<()>;
     fn apply(&mut self) -> Result<()>;

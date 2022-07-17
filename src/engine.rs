@@ -387,6 +387,12 @@ impl ISA for Engine {
             return Err(OperationError::new("Only concepts can be unbinded"));
         }
     }
+
+    fn clear(&mut self) -> Result<()> {
+        self.stack.clear();
+        self.num_assum = 0;
+        Ok(())
+    }
 }
 
 impl Engine {
