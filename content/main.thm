@@ -72,7 +72,7 @@ express
             pop
             express refer infer push 1 apply push 2 apply assume # assume a>b
                 express push 1 assume # assume a
-                    push 1
+                    push 2
                         export mp
                     pop
                 pop
@@ -118,6 +118,9 @@ express refer prop_logic assume
                                         apply
                                         # mp: a>(b>c), (a>b)>(a>c)
                                         swap # make fo_l2 on top
+                                        push 1 apply
+                                        push 2 apply
+                                        push 3 apply
                                     apply
                                     # mp state 1, waiting for (a>(b>c))
                                     push 6
