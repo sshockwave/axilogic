@@ -2,8 +2,7 @@
 express # definition
     symbol
         concept not
-    pop
-pop
+clear
 express # axiom
     symbol # a
         express
@@ -14,10 +13,7 @@ express # axiom
             assume # not(not(a))
             push 1
                 export double_neg
-            pop
-        pop
-    pop
-pop
+clear
 
 # Formal statement calculus-L
 # infer: A -> B
@@ -74,23 +70,15 @@ express
                 express push 1 assume # assume a
                     push 2
                         export mp
-                    pop
-                pop
-            pop
-        pop
-    pop
+clear
+express
     express refer double_neg assume
         express refer mp assume
             express refer fo_l1 assume
                 express refer fo_l2 assume
                     express refer fo_l3 assume
                         concept prop_logic
-                    pop
-                pop
-            pop
-        pop
-    pop
-pop
+clear
 
 # Hypothetical Syllogism
 express refer prop_logic assume
@@ -150,12 +138,4 @@ express refer prop_logic assume
                                     push 4 apply
                                     # a>c
                                     export hs
-                                pop
-                            pop
-                        pop
-                    pop
-                pop
-            pop
-        pop
-    pop
-pop
+clear
