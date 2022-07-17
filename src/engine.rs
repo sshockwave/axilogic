@@ -243,6 +243,7 @@ impl ISA for Engine {
                     return Err(OperationError::new("Function does not exist under express"));
                 }.unwrap_closure();
                 if let Forall { var, expr } = func.get_enum() {
+                    self.num_assum -= 1;
                     Term::from(Closure(expr.clone(), Env::new().add(*var, param)))
                 } else {
                     return Err(OperationError::new("The element under express is not function"));
