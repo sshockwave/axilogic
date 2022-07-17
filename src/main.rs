@@ -91,11 +91,5 @@ fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
 }
 
 fn main() {
-    // run(&mut engine::Engine::new(), stdin().lock());
-    use std::fs::File;
-    let f=match File::open("content/main.thm"){
-        Ok(e) => e,
-        Err(_) => panic!("files error")
-    };
-    run(&mut engine::Engine::new(),BufReader::new(f))
+     run(&mut engine::Engine::new(), stdin().lock());
 }

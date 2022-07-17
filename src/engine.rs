@@ -114,12 +114,12 @@ impl fmt::Display for Term {
             Symbol(t) | SymbolRef(t) => t.to_string(),
             Assumption(t) => format!("({t})=>"),
             Express => "σ".to_string(),
-            Forall {var,expr} => format!("(∀{var})({expr})"),
-            Imply(t1,t2) => format!("({t1})=>({t2})"),
-            ConceptDef {id,vars,defs} =>
-                format!("conceptdef {id}: vars:[{}]",vec2str(vars)),
-            Concept {id,vars,defs,loop_ptr} =>
-                format!("concept {id}: vars:[{}]",vec2str(vars)),
+            Forall {var, expr} => format!("(∀{var})({expr})"),
+            Imply(t1, t2) => format!("({t1})=>({t2})"),
+            ConceptDef {id, vars, ..} =>
+                format!("ConceptDef {id}: vars:[{}]", vec2str(vars)),
+            Concept {id, vars, ..} =>
+                format!("Concept {id}: vars:[{}]", vec2str(vars)),
             Closure(_, _) => format!("{}",self.clone().unwrap_closure()),
         };
         write!(f,"{s}")
