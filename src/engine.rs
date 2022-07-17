@@ -1,4 +1,4 @@
-use std::{rc::Rc, vec::Vec, iter};
+use std::{rc::Rc, vec::Vec, iter, fmt};
 
 use super::{ds, isa::{ISA, OperationError}};
 
@@ -39,16 +39,20 @@ use TermEnum::*;
 #[derive(Clone)]
 pub struct Term(Rc<TermEnum>);
 
+fn vec2str<T: ToString>(v: &Vec<T>) -> String {
+    v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+}
+
 impl Term {
     fn is_movable(&self) -> bool {
-        match self.0.as_ref() {
+        match self.get_enum() {
             Symbol(_) | Assumption(_) | Express | ConceptDef {..} => false,
             _ => true,
         }
     }
     fn unwrap_closure(&self) -> Self {
-        if let Closure(expr, env) = self.0.as_ref() {
-            match expr.0.as_ref() {
+        if let Closure(expr, env) = self.get_enum() {
+            match expr.get_enum() {
                 Symbol(_) | Assumption(_) | Express => panic!("Closure should not contain non-movable terms"),
                 SymbolRef(id) => env.get(id).map(Self::unwrap_closure).unwrap_or_else(|| expr.clone()),
                 Forall { var, expr } => Self::from(Forall {
@@ -114,6 +118,24 @@ impl Term {
     }
 }
 
+impl fmt::Display for Term {
+    fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self.get_enum() {
+            Symbol(t) | SymbolRef(t) => t.to_string(),
+            Assumption(t) => format!("({t})=>"),
+            Express => "σ".to_string(),
+            Forall {var, expr} => format!("(∀{var})({expr})"),
+            Imply(t1, t2) => format!("({t1})=>({t2})"),
+            ConceptDef {id, vars, ..} =>
+                format!("ConceptDef {id}: vars:[{}]", vec2str(vars)),
+            Concept {id, vars, ..} =>
+                format!("Concept {id}: vars:[{}]", vec2str(vars)),
+            Closure(_, _) => format!("{}",self.clone().unwrap_closure()),
+        };
+        write!(f,"{s}")
+    }
+}
+
 impl From<TermEnum> for Term {
     fn from(v: TermEnum) -> Term {
         Term(Rc::new(v))
@@ -122,9 +144,21 @@ impl From<TermEnum> for Term {
 
 type Result<T> = std::result::Result<T, OperationError>;
 
+impl fmt::Display for Engine {
+    fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
+        for x in self.stack.iter().rev() {
+            write!(f,"{x}\n")?;
+        }
+        Ok(())
+    }
+}
 
 impl ISA for Engine {
     type Term = Term;
+    fn print(&self) -> Result<()> {
+        println!("{}",self.stack[self.stack.len()-1]);
+        Ok(())
+    }
     fn push(&mut self, n: isize) -> Result<()> {
         let idx = if n < 0 { self.stack.len() - ((-n) as usize) } else { n as usize };
         if idx > self.stack.len() {
@@ -148,7 +182,7 @@ impl ISA for Engine {
         let el = if let Some(v) = self.stack.pop() { v } else {
             return Err(OperationError::new("Cannot pop on empty stack"));
         };
-        if let Express = el.0.as_ref() {
+        if let Express = el.get_enum() {
             assert!(self.num_assum > 0);
             self.num_assum -= 1;
         }
