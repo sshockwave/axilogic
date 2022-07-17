@@ -40,11 +40,7 @@ use TermEnum::*;
 pub struct Term(Rc<TermEnum>);
 
 fn vec2str<T: ToString>(v: &Vec<T>) -> String {
-    let mut s=String::new();
-    for x in v.iter() {
-        s=s+", "+&x.to_string();
-    }
-    s
+    v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
 }
 
 impl Term {
@@ -120,9 +116,10 @@ impl fmt::Display for Term {
             Express => "σ".to_string(),
             Forall {var,expr} => format!("(∀{var})({expr})"),
             Imply(t1,t2) => format!("({t1})=>({t2})"),
-            ConceptDef {id,vars,defs} => format!("concept:\n\tvars:{}\n\tdefs:{}", 
-                vec2str(vars),vec2str(defs)),
-            Concept {id,vars,defs,loop_ptr} => todo!("concept"),
+            ConceptDef {id,vars,defs} =>
+                format!("conceptdef {id}: vars:[{}]",vec2str(vars)),
+            Concept {id,vars,defs,loop_ptr} =>
+                format!("concept {id}: vars:[{}]",vec2str(vars)),
             Closure(_, _) => format!("{}",self.clone().unwrap_closure()),
         };
         write!(f,"{s}")
