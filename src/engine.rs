@@ -331,13 +331,13 @@ impl ISA for Engine {
         if let Concept { id, vars, defs, loop_ptr } = x.get_enum() {
             let mut nxt = loop_ptr + 1;
             if nxt == defs.len() { nxt += 1 }
+            self.stack.push(defs[*loop_ptr].clone());
             self.stack.push(Term::from(Concept {
                 id: *id,
                 vars: vars.clone(),
                 defs: defs.clone(),
                 loop_ptr: nxt,
             }));
-            self.stack.push(defs[*loop_ptr].clone());
             Ok(())
         } else {
             return Err(OperationError::new("Only concepts can be unbinded"));
