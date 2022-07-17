@@ -323,7 +323,7 @@ impl ISA for Engine {
                 return Err(OperationError::new("Only movable items can be exported"))
             }
             let x = x.clone();
-            Ok((self.wrap_env(x), self.is_normal_mode()))
+            Ok((self.wrap_env(x, true), self.is_normal_mode()))
         } else {
             Err(OperationError::new("Nothing to export"))
         }
@@ -341,7 +341,13 @@ impl ISA for Engine {
                 _ => (),
             }
         }
-        Ok((self.wrap_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), true))
+        Ok((
+            self.wrap_env(
+                Term::from(Concept { id, vars, defs, loop_ptr: 0 }),
+                self.is_normal_mode(),
+            ),
+            self.is_normal_mode(),
+        ))
     }
 
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()> {
@@ -396,11 +402,11 @@ impl Engine {
     pub fn new() -> Engine {
         Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
     }
-    fn wrap_env(&mut self, mut ans: Term) -> Term {
+    fn wrap_env(&mut self, mut ans: Term, use_cond: bool) -> Term {
         for t in self.stack.iter().rev() {
             match t.get_enum() {
                 Symbol(var) => ans = make_forall(&mut self.num_symbols,*var, ans),
-                Assumption(p) => if self.is_normal_mode() {
+                Assumption(p) => if use_cond {
                     ans = Term::from(Imply(p.clone(), ans))
                 } else { continue }
                 _ => (),
