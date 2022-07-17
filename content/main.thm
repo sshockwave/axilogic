@@ -106,15 +106,15 @@ express refer prop_logic assume
                                         apply
                                         # mp: a>(b>c), (a>b)>(a>c)
                                         swap # make fo_l2 on top
-                                        push 1 apply
-                                        push 2 apply
-                                        push 3 apply
+                                        express push 1 apply
+                                        express push 2 apply
+                                        express push 3 apply
                                     apply
                                     # mp state 1, waiting for (a>(b>c))
                                     push 6
                                         push 5 apply
-                                        refer infer
-                                            express push 1 apply
+                                        express refer infer
+                                            push 1 apply
                                             push 5 apply
                                         apply
                                         # mp: (b>c)>(a>(b>c))
@@ -129,7 +129,7 @@ express refer prop_logic assume
                                     # (a>b)>(a>c)
                                     push 6
                                         push 4 apply
-                                        refer infer
+                                        express refer infer
                                             push 1 apply
                                             push 3 apply
                                         apply
