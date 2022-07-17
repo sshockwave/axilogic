@@ -78,6 +78,17 @@ fn run<E: isa::ISA, B: BufRead>(eng: &mut E, input: B) {
                 };
                 eng.refer(a.clone(), *b)
             }
+            "echo" => {
+                let str = if let Some(v) = input.next() { v } else {
+                    panic!("Expected parameter for export on line {}", input.get_line_no());
+                };
+                let msg = match str {
+                    Ok(v) => v,
+                    Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
+                };
+                println!("{}", msg);
+                Ok(())
+            }
             s => {
                 panic!("Undefined command: {}", s);
             },
