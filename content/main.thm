@@ -71,6 +71,11 @@ express
                     push 2
                         export mp
 clear
+express refer mp assume
+    express refer fo_l1 assume
+        express refer fo_l2 assume
+            express concept prop_logic_pure
+clear
 express
     express refer double_neg assume
         express refer mp assume
@@ -81,14 +86,13 @@ express
 clear
 
 # Hypothetical Syllogism
-express refer prop_logic assume
+express refer prop_logic_pure assume
     symbol # a: 1
         symbol # b: 2
             symbol #c: 3
                 express refer infer push 1 apply push 2 apply assume # a>b: 4
                     express refer infer push 2 apply push 3 apply assume # b>c: 5
                         push 0 # prop_logic
-                            unbind swap pop # double_neg
                             unbind # mp: 6
                                 unbind # fo_l1: 7
                                     unbind pop # fo_l2
@@ -141,10 +145,9 @@ express refer prop_logic assume
 clear
 
 # Self-proving (a->a)
-express refer prop_logic assume
+express refer prop_logic_pure assume
     symbol # a: 1
         push 0
-            unbind swap pop # double_neg
             unbind # 2: mp
                 unbind # 3: fo_l1
                     unbind pop # 4: fo_l2
@@ -210,5 +213,171 @@ express refer prop_logic assume
                         express push 1 apply
                     apply
                     export self_prove
-                    print
+clear
+
+# Unwrap True: a>((a>b)>b)
+express refer prop_logic_pure assume
+    symbol # a: 1
+        symbol # b: 2
+            push 0
+                unbind # 3: mp
+                    unbind # 4: fo_l1
+                        unbind pop # 5: fo_l2
+                        refer hs # a, (a>b)>a, (a>b)>b
+                            push 0 apply
+                            express push 1 apply
+                            express refer infer
+                                refer infer
+                                    push 1 apply
+                                    push 2 apply
+                                apply
+                                push 1 apply
+                            apply
+                            express refer infer
+                                refer infer
+                                    push 1 apply
+                                    push 2 apply
+                                apply
+                                push 2 apply
+                            apply
+                            # HS init complete.
+                            # prepare a>((a>b)>a)
+                            push 4
+                                express push 1 apply
+                                express refer infer
+                                    push 1 apply
+                                    push 2 apply
+                                apply
+                            apply
+                            # prepare ((a>b)>a)>((a>b)>b)
+                            push 3 # mp for (a>b)>(a>b), ((a>b)>a)>((a>b)>b)
+                                express refer infer
+                                    refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                    refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                apply
+                                express refer infer
+                                    refer infer
+                                        refer infer
+                                            push 1 apply
+                                            push 2 apply
+                                        apply
+                                        push 1 apply
+                                    apply
+                                    refer infer
+                                        refer infer
+                                            push 1 apply
+                                            push 2 apply
+                                        apply
+                                        push 2 apply
+                                    apply
+                                apply
+                                # mp init complete. start p>q.
+                                push 5
+                                    express refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                    express push 1 apply
+                                    express push 2 apply
+                                apply
+                                # mp waiting for condition (a>b)>(a>b)
+                                refer self_prove
+                                    push 0 apply
+                                    express refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                apply
+                                # got ((a>b)>a)>((a>b)>b)
+                            apply
+                            export unwrap_true
+clear
+
+
+# Reduce Condition (a>(a>b))>(a>b)
+express refer prop_logic_pure assume
+    symbol # a: 1
+        symbol # b: 2
+            push 0
+                unbind # 3: mp
+                    unbind # 4: fo_l1
+                        unbind pop # 5: fo_l2
+                        refer hs
+                            push 0 apply
+                            express refer infer
+                                push 1 apply
+                                refer infer
+                                    push 1 apply
+                                    push 2 apply
+                                apply
+                            apply
+                            express refer infer
+                                refer infer
+                                    push 1 apply
+                                    push 1 apply
+                                apply
+                                refer infer
+                                    push 1 apply
+                                    push 2 apply
+                                apply
+                            apply
+                            express refer infer
+                                push 1 apply
+                                push 2 apply
+                            apply
+                            # HS init complete
+                            # Prepare (a>(a>b))>((a>a)>(a>b))
+                            push 5 # fo_l2
+                                express push 1 apply
+                                express push 1 apply
+                                express push 2 apply
+                            apply
+                            # Prepare ((a>a)>(a>b))>(a>b)
+                            push 3 # mp
+                                express refer infer
+                                    push 1 apply
+                                    push 1 apply
+                                apply
+                                express refer infer
+                                    refer infer
+                                        refer infer
+                                            push 1 apply
+                                            push 1 apply
+                                        apply
+                                        refer infer
+                                            push 1 apply
+                                            push 2 apply
+                                        apply
+                                    apply
+                                    refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                apply
+                                # mp init complete
+                                # prepare (a>a)>(((a>a)>(a>b))>(a>b))
+                                refer unwrap_true
+                                    push 0 apply
+                                    express refer infer
+                                        push 1 apply
+                                        push 1 apply
+                                    apply
+                                    express refer infer
+                                        push 1 apply
+                                        push 2 apply
+                                    apply
+                                apply
+                                refer self_prove
+                                    push 0 apply
+                                    express push 1 apply
+                                apply
+                            apply
+                            export reduce_condition
+clear
 clear
