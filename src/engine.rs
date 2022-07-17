@@ -21,11 +21,6 @@ pub enum TermEnum {
         expr: Term,
     },
     Imply(Term, Term),
-    ConceptDef{
-        id: usize,
-        vars: Vec<usize>,
-        defs: Vec<Term>,
-    },
     Concept{
         id: usize,
         vars: Vec<Term>,
@@ -46,7 +41,7 @@ fn vec2str<T: ToString>(v: &Vec<T>) -> String {
 impl Term {
     fn is_movable(&self) -> bool {
         match self.get_enum() {
-            Symbol(_) | Assumption(_) | Express | ConceptDef {..} => false,
+            Symbol(_) | Assumption(_) | Express => false,
             _ => true,
         }
     }
@@ -82,20 +77,6 @@ impl Term {
                     }
                     Term::from(Concept { id: *id, vars: vars2, defs: defs2, loop_ptr: *loop_ptr })
                 }
-                ConceptDef { id, vars, defs } => {
-                    let mut vars2 = Vec::with_capacity(vars.len());
-                    let mut defs2 = Vec::with_capacity(defs.len());
-                    let mut env2 = Env::new();
-                    for k in vars {
-                        let v = env.get(k).unwrap();
-                        vars2.push(v.clone());
-                        env2 = env2.add(*k, v.clone());
-                    }
-                    for t in defs {
-                        defs2.push(Term::from(Closure(t.clone(), env2.clone())));
-                    }
-                    Term::from(Concept { id: *id, loop_ptr: 0, vars: vars2, defs: defs2 })
-                }
             }
         } else {
             self.clone()
@@ -112,7 +93,6 @@ impl Term {
             (Symbol(a), Symbol(b)) => a == b,
             (SymbolRef(a), SymbolRef(b)) => a == b,
             (Express, Express) => true,
-            (ConceptDef{id: id1, ..}, ConceptDef{id: id2, ..}) => id1 == id2,
             _ => false,
         }
     }
@@ -126,8 +106,6 @@ impl fmt::Display for Term {
             Express => "σ".to_string(),
             Forall {var, expr} => format!("(∀{var})({expr})"),
             Imply(t1, t2) => format!("({t1})=>({t2})"),
-            ConceptDef {id, vars, ..} =>
-                format!("ConceptDef {id}: vars:[{}]", vec2str(vars)),
             Concept {id, vars, ..} =>
                 format!("Concept {id} [{}]", vec2str(vars)),
             Closure(_, _) => format!("{}",self.unwrap_closure()),
@@ -359,16 +337,14 @@ impl ISA for Engine {
         for t in self.stack.iter() {
             match t.get_enum() {
                 Assumption(t) => defs.push(t.clone()),
-                Symbol(x) => vars.push(*x),
+                Symbol(x) => vars.push(Term::from(SymbolRef(*x))),
                 _ => (),
             }
         }
-        if vars.is_empty() {
-            Ok((Term::from(Concept { id, vars: Vec::new(), defs, loop_ptr: 0 }), self.is_normal_mode()))
-        } else if self.is_normal_mode() {
-            Ok((self.wrap_env(Term::from(ConceptDef { id, vars, defs })), true))
+        if self.is_normal_mode() {
+            Ok((self.wrap_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), true))
         } else {
-            Ok((self.wrap_vars_env(Term::from(ConceptDef { id, vars, defs })), false))
+            Ok((self.wrap_vars_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })), false))
         }
     }
 
