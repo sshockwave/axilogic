@@ -96,6 +96,18 @@ impl Term {
             _ => false,
         }
     }
+    fn remove_predicates(self: &Term) -> Term {
+        match self.unwrap_closure().get_enum() {
+            Symbol(_) | Assumption(_) | Express => panic!("Closure should not contain non-movable terms"),
+            Closure(..) => panic!("Closure should have been removed"),
+            SymbolRef(_) | Concept {..} => self.clone(),
+            Forall { var, expr } => Self::from(Forall {
+                var: *var,
+                expr: expr.remove_predicates(),
+            }),
+            Imply(_, q) => q.remove_predicates(),
+        }
+    }
 }
 
 impl fmt::Display for Term {
@@ -324,7 +336,7 @@ impl ISA for Engine {
                 return Err(OperationError::new("Only movable items can be exported"))
             }
             let x = x.clone();
-            Ok((self.wrap_env(x, true), self.is_normal_mode()))
+            Ok((self.wrap_env(x), self.is_normal_mode()))
         } else {
             Err(OperationError::new("Nothing to export"))
         }
@@ -343,10 +355,7 @@ impl ISA for Engine {
             }
         }
         Ok((
-            self.wrap_env(
-                Term::from(Concept { id, vars, defs, loop_ptr: 0 }),
-                self.is_normal_mode(),
-            ),
+            self.wrap_env(Term::from(Concept { id, vars, defs, loop_ptr: 0 })),
             self.is_normal_mode(),
         ))
     }
@@ -384,6 +393,21 @@ impl ISA for Engine {
         self.num_assum = 0;
         Ok(())
     }
+
+    fn trust_all(&mut self) -> Result<()> {
+        if let Some(x) = self.stack.pop() {
+            if !x.is_movable() {
+                return Err(OperationError::new("Non-movable expression cannot be assumed"));
+            }
+            if self.is_normal_mode() {
+                return Err(OperationError::new("Cannot trust in normal mode"));
+            }
+            self.stack.push(x.remove_predicates());
+            Ok(())
+        } else {
+            Err(OperationError::new("Nothing to trust"))
+        }
+    }
 }
 
 fn make_forall(num_symbols: &mut usize, old_id: usize, expr: Term) -> Term {
@@ -403,13 +427,11 @@ impl Engine {
     pub fn new() -> Engine {
         Engine { stack: Vec::new(), num_symbols: 0, num_concepts: 0, num_assum: 0 }
     }
-    fn wrap_env(&mut self, mut ans: Term, use_cond: bool) -> Term {
+    fn wrap_env(&mut self, mut ans: Term) -> Term {
         for t in self.stack.iter().rev() {
             match t.get_enum() {
                 Symbol(var) => ans = make_forall(&mut self.num_symbols,*var, ans),
-                Assumption(p) => if use_cond {
-                    ans = Term::from(Imply(p.clone(), ans))
-                } else { continue }
+                Assumption(p) => ans = Term::from(Imply(p.clone(), ans)),
                 _ => (),
             }
         }

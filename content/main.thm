@@ -74,19 +74,18 @@ clear
 express refer mp assume
     express refer fo_l1 assume
         express refer fo_l2 assume
-            express concept prop_logic_pure
+            concept prop_logic_pure
 clear
-express
-    express refer double_neg assume
-        express refer mp assume
-            express refer fo_l1 assume
-                express refer fo_l2 assume
-                    express refer fo_l3 assume
-                        concept prop_logic
+express refer double_neg assume
+    express refer mp assume
+        express refer fo_l1 assume
+            express refer fo_l2 assume
+                express refer fo_l3 assume
+                    concept prop_logic
 clear
 
 # Hypothetical Syllogism
-express refer prop_logic_pure assume
+express refer prop_logic_pure trustall assume
     symbol # a: 1
         symbol # b: 2
             symbol #c: 3
@@ -145,7 +144,7 @@ express refer prop_logic_pure assume
 clear
 
 # Self-proving (a->a)
-express refer prop_logic_pure assume
+express refer prop_logic_pure trustall assume
     symbol # a: 1
         push 0
             unbind # 2: mp
@@ -216,7 +215,7 @@ express refer prop_logic_pure assume
 clear
 
 # Unwrap True: a>((a>b)>b)
-express refer prop_logic_pure assume
+express refer prop_logic_pure trustall assume
     symbol # a: 1
         symbol # b: 2
             push 0
@@ -301,7 +300,7 @@ clear
 
 
 # Reduce Condition (a>(a>b))>(a>b)
-express refer prop_logic_pure assume
+express refer prop_logic_pure trustall assume
     symbol # a: 1
         symbol # b: 2
             push 0

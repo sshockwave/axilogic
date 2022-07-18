@@ -39,6 +39,7 @@ pub trait ISA {
     fn assume(&mut self) -> Result<()>;
     fn abs(&mut self) -> Result<()>; // abstract is a keyword in rust
     fn trust(&mut self) -> Result<()>;
+    fn trust_all(&mut self) -> Result<()>;
     fn export(&mut self) -> Result<(Self::Term, bool)>;
     fn concept(&mut self) -> Result<(Self::Term, bool)>;
     fn refer(&mut self, term: Self::Term, truthy: bool) -> Result<()>;

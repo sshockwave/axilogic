@@ -1,4 +1,4 @@
-use std::{io::{BufRead, stdin, BufReader}, vec::Vec, fmt};
+use std::{io::{BufRead, stdin, BufReader}, fmt};
 
 mod isa;
 mod engine;
@@ -38,6 +38,7 @@ fn run<E: isa::ISA + fmt::Display, B: BufRead>(eng: &mut E, input: B) {
             "assume" => eng.assume(),
             "abstract" => eng.abs(),
             "trust" => eng.trust(),
+            "trustall" => eng.trust_all(),
             "unbind" => eng.unbind(),
             "print" => eng.print(),
             "clear" => eng.clear(),
