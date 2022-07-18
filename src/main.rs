@@ -27,33 +27,36 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
             opened_files: HashSet::new(),
         }
     }
-    fn find_ref(&mut self, p: String) -> (E::Term, bool) {
-        if let Some((a, b)) = self.pkgdir.get(&p) {
-            return (a.clone(), *b);
-        }
+    fn get_mod_path(&self, p: &str) -> PathBuf {
         let mut cur_path = if let Some(v) = &self.fs_root { v.clone() } else {
             panic!("No FS root provided and refer not found");
         };
-        let mut cwd = Vec::new();
-        for s in path::to_iter(&p) {
+        for s in path::to_iter(p) {
             if s == path::PARENT_DIR {
                 let ok = cur_path.pop();
                 assert!(ok, "Cannot go up any more");
             } else {
                 cur_path.push(s);
             }
-            cwd.push(s);
         }
-        cwd.pop();
-        cur_path.pop();
         cur_path.set_extension("thm");
+        cur_path
+    }
+    fn find_ref(&mut self, p: String) -> (E::Term, bool) {
+        if let Some((a, b)) = self.pkgdir.get(&p) {
+            return (a.clone(), *b);
+        }
+        let mut cwd = path::to_iter(&p).collect::<Vec<_>>();
+        cwd.pop();
+        let cwd = path::collect(&cwd);
+        let cur_path = self.get_mod_path(&cwd);
         println!("Open new file {:?} to find object {}", cur_path, &p);
         if self.opened_files.contains(&cur_path) {
             println!("Finding object {}", p);
             panic!("But loop found. File already opened: {:?}", cur_path);
         }
         self.opened_files.insert(cur_path.clone());
-        self.run(BufReader::new(File::open(cur_path.clone()).unwrap()), &path::collect(&cwd));
+        self.run(BufReader::new(File::open(cur_path.clone()).unwrap()), &cwd);
         self.opened_files.remove(&cur_path);
         if let Some((a, b)) = self.pkgdir.get(&p) {
             (a.clone(), *b)
@@ -159,7 +162,7 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
             };
             let result = self.run_one_command(cmd, &mut input, cwd);
             if let Err(v) = result {
-                panic!("Error occurred on {}:{} :: {:?}", cwd, input.get_line_no(), v);
+                panic!("Error occurred on {:?}:{} :: {:?}", self.get_mod_path(cwd), input.get_line_no(), v);
             }
         }
         println!("Examination succeeded.");
