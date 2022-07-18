@@ -1,4 +1,4 @@
-use std::{io::{BufRead, BufReader}, fmt, fs::File, path::{Path, PathBuf}};
+use std::{io::{BufRead, BufReader}, fmt, fs::File, path::{Path, PathBuf}, collections::HashSet};
 
 mod isa;
 mod engine;
@@ -15,6 +15,7 @@ struct Runner<E: isa::ISA + fmt::Display> {
     eng: E,
     pkgdir: pkg::PkgDir<(E::Term, bool)>,
     fs_root: Option<PathBuf>,
+    opened_files: HashSet<PathBuf>,
 }
 
 impl<E: isa::ISA + fmt::Display> Runner<E> {
@@ -23,6 +24,7 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
             eng,
             pkgdir: pkg::PkgDir::new(),
             fs_root: cwd.map(|x|PathBuf::from(x.as_ref())),
+            opened_files: HashSet::new(),
         }
     }
     fn find_ref(&mut self, p: String) -> (E::Term, bool) {
@@ -45,7 +47,14 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
         cwd.pop();
         cur_path.pop();
         cur_path.set_extension("thm");
-        self.run(BufReader::new(File::open(cur_path).unwrap()), &path::collect(&cwd));
+        println!("Open new file {:?} to find object {}", cur_path, &p);
+        if self.opened_files.contains(&cur_path) {
+            println!("Finding object {}", p);
+            panic!("But loop found. File already opened: {:?}", cur_path);
+        }
+        self.opened_files.insert(cur_path.clone());
+        self.run(BufReader::new(File::open(cur_path.clone()).unwrap()), &path::collect(&cwd));
+        self.opened_files.remove(&cur_path);
         if let Some((a, b)) = self.pkgdir.get(&p) {
             (a.clone(), *b)
         } else {
