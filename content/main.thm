@@ -379,4 +379,213 @@ express refer prop_logic_pure trustall assume
                             apply
                             export reduce_condition
 clear
+
+# Proof by contradiction
+express refer prop_logic trustall assume
+    symbol # a: 1
+        push 0
+            unbind # 2: double_neg
+                unbind # 3: mp
+                    unbind # 4: fo_l1
+                        unbind # 5: fo_l2
+                            unbind pop # 6: fo_l3
+                            refer hs
+                                refer prop_logic_pure
+                                    push 3 apply
+                                    push 4 apply
+                                    push 5 apply
+                                apply
+                                express refer not
+                                    push 1 apply
+                                apply # ~a
+                                express refer infer
+                                    refer not
+                                        refer not
+                                            refer infer
+                                                refer not
+                                                    push 1 apply
+                                                apply
+                                                push 1 apply
+                                            apply
+                                        apply
+                                    apply
+                                    refer not
+                                        push 1 apply
+                                    apply
+                                    # (~~(~a>a)>~a)
+                                apply 
+                                express refer infer
+                                    push 1 apply
+                                    refer not
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                    apply
+                                    # a>(~(~a>a))
+                                apply
+                                # HS init complete, expect a>b and b>c
+                                push 4 # fo_l1
+                                    express refer not
+                                        push 1 apply
+                                    apply
+                                    express refer not
+                                        refer not
+                                            refer infer
+                                                refer not
+                                                    push 1 apply
+                                                apply
+                                                push 1 apply
+                                            apply
+                                        apply
+                                    apply
+                                    # (~a>(~~(~a>a)>~a))
+                                apply
+                                push 6 # fo_l3
+                                    express refer not
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                    apply
+                                    express push 1 apply
+                                apply
+                                # HS complete, get on 7:
+                                # (~a>(a>~(~a>a)))
+                                push 3 # mp
+                                    push 7 apply # (~a>(a>~(~a>a)))
+                                    express refer infer
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            refer not
+                                                refer infer
+                                                    refer not
+                                                        push 1 apply
+                                                    apply
+                                                    push 1 apply
+                                                apply
+                                            apply
+                                        apply
+                                    apply
+                                    push 5 # fo_l2
+                                        express refer not
+                                            push 1 apply
+                                        apply # ~a
+                                        express push 1 apply # a
+                                        express refer not
+                                            refer infer
+                                                refer not
+                                                    push 1 apply
+                                                apply # ~a
+                                                push 1 apply # a
+                                            apply # ~a>a
+                                        apply #~(~a>a)
+                                    apply # (~a>(a>~(~a>a)))>((~a>a)>(~a>~(~a>a)))
+                                    swap
+                                apply
+                                # (~a>a)>(~a>~(~a>a))
+                                refer hs # (~a>a),(~a>~(~a>a)),((~a>a)>a)
+                                    refer prop_logic_pure
+                                        push 3 apply
+                                        push 4 apply
+                                        push 5 apply
+                                    apply
+                                    express refer infer
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        push 1 apply
+                                    apply # (~a>a)
+                                    express refer infer
+                                        refer not
+                                            push 1 apply
+                                        apply # ~a
+                                        refer not
+                                            refer infer
+                                                refer not
+                                                    push 1 apply
+                                                apply
+                                                push 1 apply
+                                            apply
+                                        apply # ~(~a>a)
+                                    apply # ~a>~(~a>a)
+                                    express refer infer
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply # (~a>a)
+                                        push 1 apply # a
+                                    apply # (~a>a)>a
+                                    swap
+                                apply
+                                push 6 # fo_l3
+                                    express push 1 apply
+                                    express refer infer
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        push 1 apply
+                                    apply # (~a>a)
+                                    # (~a>~(~a>a))>((~a>a)>a)
+                                apply
+                                # (~a>a)>((~a>a)>a)
+                                push 3 # mp
+                                    express refer infer
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                        refer infer
+                                            refer infer
+                                                refer not
+                                                    push 1 apply
+                                                apply
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                    apply
+                                    express refer infer
+                                        refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                        push 1 apply
+                                    apply
+                                    refer reduce_condition
+                                        refer prop_logic_pure
+                                            push 3 apply
+                                            push 4 apply
+                                            push 5 apply
+                                        apply
+                                        express refer infer
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            push 1 apply
+                                        apply
+                                        express push 1 apply
+                                    apply
+                                    swap
+                                apply
+                                export proof_by_contradiction
+clear
 clear
