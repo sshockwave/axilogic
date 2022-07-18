@@ -3,17 +3,6 @@ express # definition
     symbol
         concept not
 clear
-express # axiom
-    symbol # a
-        express
-            refer not
-                refer not
-                    push 1 apply
-                apply
-            assume # not(not(a))
-            push 1
-                export double_neg
-clear
 
 # Formal statement calculus-L
 # infer: A -> B
@@ -76,12 +65,11 @@ express refer mp assume
         express refer fo_l2 assume
             concept prop_logic_pure
 clear
-express refer double_neg assume
-    express refer mp assume
-        express refer fo_l1 assume
-            express refer fo_l2 assume
-                express refer fo_l3 assume
-                    concept prop_logic
+express refer mp assume
+    express refer fo_l1 assume
+        express refer fo_l2 assume
+            express refer fo_l3 assume
+                concept prop_logic
 clear
 
 # Hypothetical Syllogism
@@ -384,7 +372,7 @@ clear
 express refer prop_logic trustall assume
     symbol # a: 1
         push 0
-            unbind # 2: double_neg
+            push 0 # 2: double_neg
                 unbind # 3: mp
                     unbind # 4: fo_l1
                         unbind # 5: fo_l2
@@ -588,4 +576,187 @@ express refer prop_logic trustall assume
                                 apply
                                 export proof_by_contradiction
 clear
+
+# Double Negative: ~~a>a
+express refer prop_logic trustall assume
+    symbol # a: 1
+        push 0
+            unbind # 2: mp
+                unbind # 3: fo_l1
+                    unbind # 4: fo_l2
+                        unbind pop # 5: fo_l3
+                        push 2 # mp for (~~a>(b>a))>((~~a>b)>(~~a>a))
+                        # where b = (~a>~~a)
+                            express refer infer
+                                refer not refer not
+                                    push 1 apply
+                                apply apply
+                                refer infer
+                                    # prepare b
+                                    refer infer
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        refer not refer not
+                                            push 1 apply
+                                        apply apply
+                                    apply # b end
+                                    push 1 apply
+                                apply
+                            apply # mp param 1 complete
+                            express refer infer
+                                refer infer
+                                    refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                    refer infer # b start
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        refer not refer not
+                                            push 1 apply
+                                        apply apply
+                                    apply # b end
+                                apply
+                                refer infer
+                                    refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                    push 1 apply
+                                apply
+                            apply
+                            push 4 # fo_l2
+                                express refer not
+                                    refer not
+                                        push 1 apply
+                                    apply
+                                apply # ~~a
+                                express refer infer
+                                    refer not
+                                        push 1 apply
+                                    apply
+                                    refer not
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                    apply
+                                apply
+                                express push 1 apply
+                            apply
+                            # mp waiting for condition
+                            # condition: (~~a>(b>a))
+                            push 2 # mp for (b>a),(~~a>(b>a))
+                                express refer infer
+                                    refer infer # b start
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        refer not refer not
+                                            push 1 apply
+                                        apply apply
+                                    apply # b end
+                                    push 1 apply
+                                apply
+                                express refer infer
+                                    refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                    refer infer
+                                        refer infer # b start
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            refer not refer not
+                                                push 1 apply
+                                            apply apply
+                                        apply # b end
+                                        push 1 apply
+                                    apply
+                                apply
+                                # make p>q for mp
+                                push 3 # fo_l1
+                                    express refer infer
+                                        refer infer # b start
+                                            refer not
+                                                push 1 apply
+                                            apply
+                                            refer not refer not
+                                                push 1 apply
+                                            apply apply
+                                        apply # b end
+                                        push 1 apply
+                                    apply
+                                    express refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                apply
+                                # mp ready for condition
+                                refer hs # hs for b, ~a>a, a
+                                    refer prop_logic_pure
+                                        push 2 apply
+                                        push 3 apply
+                                        push 4 apply
+                                    apply
+                                    express refer infer # begin b
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        refer not refer not
+                                            push 1 apply
+                                        apply apply
+                                    apply # end b
+                                    express refer infer
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        push 1 apply
+                                    apply
+                                    express push 1 apply
+                                    # hs init complete.
+                                    push 5 # fo_l3
+                                        express push 1 apply
+                                        express refer not
+                                            push 1 apply
+                                        apply
+                                    apply
+                                    refer proof_by_contradiction
+                                        push 0 apply
+                                        express push 1 apply
+                                    apply
+                                apply
+                            apply
+                            # ((~~a>b)>(~~a>a))
+                            push 2 # mp for (~~a>b), (~~a>a)
+                                express refer infer
+                                    refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                    refer infer # begin b
+                                        refer not
+                                            push 1 apply
+                                        apply
+                                        refer not refer not
+                                            push 1 apply
+                                        apply apply
+                                    apply # end b
+                                apply
+                                express refer infer
+                                    refer not refer not
+                                        push 1 apply
+                                    apply apply
+                                    push 1 apply
+                                apply
+                                # mp init complete
+                                swap
+                            apply
+                            # mp ready, waiting for condition
+                            push 3 # fo_l1 for (~~a>b)
+                                express refer not refer not
+                                    push 1 apply
+                                apply apply
+                                express refer not
+                                    push 1 apply
+                                apply
+                            apply
+                            export double_neg
 clear

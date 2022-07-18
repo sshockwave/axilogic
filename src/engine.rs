@@ -374,7 +374,7 @@ impl ISA for Engine {
         }.unwrap_closure();
         if let Concept { id, vars, defs, loop_ptr } = x.get_enum() {
             let mut nxt = loop_ptr + 1;
-            if nxt == defs.len() { nxt += 1 }
+            if nxt == defs.len() { nxt = 0 }
             self.stack.push(defs[*loop_ptr].clone());
             self.stack.push(Term::from(Concept {
                 id: *id,
