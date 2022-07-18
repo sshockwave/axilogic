@@ -1,21 +1,58 @@
-use std::{io::{BufRead, stdin, BufReader}, fmt};
+use std::{io::{BufRead, BufReader}, fmt, fs::File, path::{Path, PathBuf}};
 
 mod isa;
 mod engine;
 mod ds;
 mod pkg;
 mod scan;
+mod path;
+
+use isa::OperationError;
+use scan::TokenScanner;
+
 
 struct Runner<E: isa::ISA + fmt::Display> {
     eng: E,
     pkgdir: pkg::PkgDir<(E::Term, bool)>,
+    fs_root: Option<PathBuf>,
 }
 
 impl<E: isa::ISA + fmt::Display> Runner<E> {
-    fn new(eng: E) -> Self {
-        Self { eng, pkgdir: pkg::PkgDir::new() }
+    fn new<P: AsRef<Path>>(eng: E, cwd: Option<P>) -> Self {
+        Self {
+            eng,
+            pkgdir: pkg::PkgDir::new(),
+            fs_root: cwd.map(|x|PathBuf::from(x.as_ref())),
+        }
     }
-    fn run_one_command<B: BufRead>(&mut self, cmd: String, input: &mut TokenScanner<B>) -> Result<(), OperationError>{
+    fn find_ref(&mut self, p: String) -> (E::Term, bool) {
+        if let Some((a, b)) = self.pkgdir.get(&p) {
+            return (a.clone(), *b);
+        }
+        let mut cur_path = if let Some(v) = &self.fs_root { v.clone() } else {
+            panic!("No FS root provided and refer not found");
+        };
+        let mut cwd = Vec::new();
+        for s in path::to_iter(&p) {
+            if s == path::PARENT_DIR {
+                let ok = cur_path.pop();
+                assert!(ok, "Cannot go up any more");
+            } else {
+                cur_path.push(s);
+            }
+            cwd.push(s);
+        }
+        cwd.pop();
+        cur_path.pop();
+        cur_path.set_extension("thm");
+        self.run(BufReader::new(File::open(cur_path).unwrap()), &path::collect(&cwd));
+        if let Some((a, b)) = self.pkgdir.get(&p) {
+            (a.clone(), *b)
+        } else {
+            panic!("Reference not found in corresponding file");
+        }
+    }
+    fn run_one_command<B: BufRead>(&mut self, cmd: String, input: &mut TokenScanner<B>, cwd: &str) -> Result<(), OperationError>{
         let eng = &mut self.eng;
         match cmd.as_str() {
             "push" => {
@@ -53,6 +90,8 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
                     Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
                 };
                 // TODO: check name validity
+                let path = path::join(cwd.to_string(), path);
+                assert!(path::start_with(path.clone(), cwd.to_string()), "Cannot export to super packages");
                 eng.export().map(
                     |x| self.pkgdir.set(path.to_string(), x)
                 )
@@ -66,6 +105,8 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
                     Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
                 };
                 // TODO: check name validity
+                let path = path::join(cwd.to_string(), path);
+                assert!(path::start_with(path.clone(), cwd.to_string()), "Cannot make concept to super packages");
                 eng.concept().map(
                     |x| self.pkgdir.set(path.to_string(), x)
                 )
@@ -78,10 +119,9 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
                     Ok(v) => v,
                     Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
                 };
-                let (a, b) = if let Some(v) = self.pkgdir.get(&path) { v } else {
-                    panic!("Name {} does not exist on line {}", path, input.get_line_no());
-                };
-                eng.refer(a.clone(), *b)
+                let path = path::join(cwd.to_string(), path);
+                let (a, b) = self.find_ref(path);
+                self.eng.refer(a, b)
             }
             "echo" => {
                 let str = if let Some(v) = input.next() { v } else {
@@ -100,7 +140,7 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
         }
     }
 
-    fn run<B: BufRead>(&mut self, input: B) {
+    fn run<B: BufRead>(&mut self, input: B, cwd: &str) {
         let mut input = scan::TokenScanner::new(input);
         loop {
             let cmd = if let Some(v) = input.next() { v } else { break };
@@ -108,9 +148,9 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
                 Ok(v) => v,
                 Err(e) => panic!("Error occurred on parsing line {}: {:?}", input.get_line_no(), e),
             };
-            let result = self.run_one_command(cmd, &mut input);
+            let result = self.run_one_command(cmd, &mut input, cwd);
             if let Err(v) = result {
-                panic!("Error occurred on line {}: {:?}", input.get_line_no(), v);
+                panic!("Error occurred on {}:{} :: {:?}", cwd, input.get_line_no(), v);
             }
         }
         println!("Examination succeeded.");
@@ -118,5 +158,9 @@ impl<E: isa::ISA + fmt::Display> Runner<E> {
 }
 
 fn main() {
-    Runner::new(engine::Engine::new()).run(stdin().lock());
+    let mut file_path = PathBuf::from("./content/main.thm");
+    let file = File::open(file_path.as_os_str()).unwrap();
+    file_path.pop();
+    Runner::new(engine::Engine::new(), Some(file_path))
+        .run(BufReader::new(file), "main");
 }
