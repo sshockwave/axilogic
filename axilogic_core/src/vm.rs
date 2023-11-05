@@ -10,34 +10,22 @@ pub enum Element {
     Concept{
         id: usize,
         len: usize,
-        el: Vec<Element>,
+        el: Vec<Rc<Element>>,
     },
 }
 
 pub struct Verifier {
     concept_cnt: usize,
     expression_line: Option<usize>,
-    stack: Vec<Element>,
-    symbol_table: HashMap<String, (bool, Element)>,
+    stack: Vec<Rc<Element>>,
+    symbol_rc: Rc<Element>,
+    symbol_table: HashMap<String, (bool, Rc<Element>)>,
 }
 
-fn nth_symbol<'a, T: IntoIterator<Item = &'a Element>>(iter: T, mut n: usize) -> usize {
+fn count_symbol<'a, T: IntoIterator<Item = &'a Rc<Element>>>(iter: T) -> usize {
     let mut cnt = 0;
     for el in iter {
-        if Element::Symbol == *el {
-            if n == 0 {
-                break;
-            }
-            n -= 1;
-        }
-        cnt += 1;
-    }
-    cnt
-}
-fn count_symbol<'a, T: IntoIterator<Item = &'a Element>>(iter: T) -> usize {
-    let mut cnt = 0;
-    for el in iter {
-        if Element::Symbol == *el {
+        if Element::Symbol == **el {
             cnt += 1;
         }
     }
@@ -45,33 +33,36 @@ fn count_symbol<'a, T: IntoIterator<Item = &'a Element>>(iter: T) -> usize {
 }
 
 // If nothing is changed, return None.
-fn dfs_patch(f: &Element, v: Element, level: usize) -> Option<Element> {
+fn dfs_patch(f: Rc<Element>, v: Rc<Element>, level: usize) -> Rc<Element> {
     use Element::*;
-    match f {
+    match f.as_ref() {
         Symbol => panic!("Symbol in forall statement"),
         SymbolRef(i) => {
             if *i == level {
-                if v == *f {
-                    None
-                } else {
-                    Some(v)
-                }
+                v
             } else if *i > level {
-                Some(SymbolRef(*i - 1))
+                Rc::new(SymbolRef(*i - 1))
             } else {
-                None
+                f
             }
         },
-        Universal(f) => Some(Universal(Rc::new(dfs_patch(f.as_ref(), v, level + 1)?))),
-        Concept { id, len, el } => {
-            let vec: Vec<_> = el.iter().map(|x| dfs_patch(x, v.clone(), level)).collect();
-            if vec.iter().all(|x| x.is_none()) {
-                None
+        Universal(body) => {
+            let new_body = dfs_patch(body.clone(), v, level + 1);
+            if Rc::ptr_eq(&f, &new_body) {
+                f
             } else {
-                Some(Concept {
+                Rc::new(Universal(new_body))
+            }
+        },
+        Concept { id, len, el } => {
+            let vec: Vec<_> = el.iter().map(|x| dfs_patch(x.clone(), v.clone(), level)).collect();
+            if vec.iter().zip(el.iter()).all(|(x, y)| Rc::ptr_eq(x, y)) {
+                f
+            } else {
+                Rc::new(Concept {
                     id: *id,
                     len: *len,
-                    el: vec.into_iter().zip(el.iter()).map(|(x, default)| x.unwrap_or_else(|| default.clone())).collect(),
+                    el: vec,
                 })
             }
         },
@@ -79,12 +70,13 @@ fn dfs_patch(f: &Element, v: Element, level: usize) -> Option<Element> {
 }
 
 impl Verifier {
-    fn new() -> Self {
+    pub fn new() -> Self {
         // TODO: create core::make_imply
         Self {
             concept_cnt: 1,
             expression_line: None,
             stack: Vec::new(),
+            symbol_rc: Rc::new(Element::Symbol),
             symbol_table: HashMap::new(),
         }
     }
@@ -97,7 +89,7 @@ impl Verifier {
         }
     }
 
-    fn pop_one(&mut self) -> Result<Element> {
+    fn pop_one(&mut self) -> Result<Rc<Element>> {
         match self.stack.pop() {
             Some(el) => Ok(el),
             None => Err(OperationError::new("Stack underflow")),
@@ -121,20 +113,16 @@ impl super::isa::ISA for Verifier {
             d
         };
         use Element::*;
-        let el = match self.stack[i] {
+        let el = self.stack.get(i).unwrap();
+        let el = match self.stack[i].as_ref() {
             Symbol => {
                 if let None = self.expression_line {
                     return Err(OperationError::new("Cannot duplicate symbol outside expression mode"));
                 }
-                SymbolRef(count_symbol(&self.stack[(i+1)..]))
+                Rc::new(SymbolRef(count_symbol(&self.stack[(i+1)..])))
             },
-            SymbolRef(i2) => SymbolRef(i2 + count_symbol(&self.stack[(i+1)..])),
-            Universal(ref el) => Universal(el.clone()),
-            Concept{ref id, ref len, ref el} => Concept{
-                id: *id,
-                len: *len,
-                el: el.iter().map(|el| el.clone()).collect(),
-            },
+            SymbolRef(i2) => Rc::new(SymbolRef(i2 + count_symbol(&self.stack[(i+1)..]))),
+            _ => el.clone(),
         };
         self.stack.push(el);
         Ok(())
@@ -147,20 +135,20 @@ impl super::isa::ISA for Verifier {
     }
 
     fn variable(&mut self) -> Result<()> {
-        self.stack.push(Element::Symbol);
+        self.stack.push(self.symbol_rc.clone());
         Ok(())
     }
 
     fn forall(&mut self) -> Result<()> {
         let pred = self.pop_one()?;
-        if let Element::Symbol = pred {
+        if let Element::Symbol = pred.as_ref() {
             return Err(OperationError::new("Variable cannot be a predicate for the forall qualifier"));
         }
-        match self.pop_one()? {
+        match self.pop_one()?.as_ref() {
             Element::Symbol => (),
             _ => return Err(OperationError::new("Expected symbol when binding a forall qualifier")),
         }
-        self.stack.push(Element::Universal(Rc::new(pred)));
+        self.stack.push(Rc::new(Element::Universal(pred)));
         if let Some(i) = self.expression_line {
             if i == self.stack.len() {
                 return Err(OperationError::new("The quantifier is not in expression mode but the predicate is"));
@@ -172,18 +160,19 @@ impl super::isa::ISA for Verifier {
     fn apply(&mut self) -> Result<()> {
         use Element::*;
         let v = self.pop_one()?;
-        if let Symbol = v {
+        if let Symbol = v.as_ref() {
             return Err(OperationError::new("Cannot apply an unbounded variable"));
         }
         self.maybe_exit_expr();
-        match self.pop_one()? {
-            Universal(pred) => self.stack.push(dfs_patch(pred.as_ref(), v, 0).unwrap_or(pred.as_ref().clone())),
-            Concept { id, len, mut el } => {
-                if len == el.len() {
+        match self.pop_one()?.as_ref() {
+            Universal(pred) => self.stack.push(dfs_patch(pred.clone(), v, 0)),
+            Concept { id, len, el } => {
+                if *len == el.len() {
                     return Err(OperationError::new("The concept has already been fully applied"));
                 }
+                let mut el = el.clone();
                 el.push(v);
-                self.stack.push(Concept { id, len, el });
+                self.stack.push(Rc::new(Concept { id: *id, len: *len, el }));
             },
             _ => return Err(OperationError::new("Expected forall statement when applying a variable")),
         }
@@ -191,25 +180,25 @@ impl super::isa::ISA for Verifier {
     }
 
     fn concept(&mut self, n: usize) -> Result<()> {
-        self.stack.push(Element::Concept { id: self.concept_cnt, len: n, el: Vec::new() });
+        self.stack.push(Rc::new(Element::Concept { id: self.concept_cnt, len: n, el: Vec::new() }));
         self.concept_cnt += 1;
         Ok(())
     }
     fn mp(&mut self) -> Result<()> {
         let p = self.pop_one()?;
         let pq = self.pop_one()?;
-        if let Element::Concept { id, len, mut el } = pq {
-            if id != 0 {
+        if let Element::Concept { id, len, el } = pq.as_ref() {
+            if *id != 0 {
                 return Err(OperationError::new("Expected imply statement"));
             }
-            assert_eq!(len, 2);
+            assert_eq!(*len, 2);
             if el.len() != 2 {
                 return Err(OperationError::new("Imply statement incomplete"));
             }
             if el[0] != p {
                 return Err(OperationError::new("Condition mismatch"));
             }
-            self.stack.push(el.pop().unwrap());
+            self.stack.push(el[1].clone());
             if let Some(i) = self.expression_line {
                 if i == self.stack.len() {
                     return Err(OperationError::new("The predicate is not in expression mode but the premise is"));
@@ -233,15 +222,15 @@ impl super::isa::ISA for Verifier {
         if let None = self.expression_line {
             return Err(OperationError::new("Not in expression mode"));
         }
-        if let Element::Concept { id, len, mut el } = pq {
-            if id != 0 {
+        if let Element::Concept { id, len, el } = pq.as_ref() {
+            if *id != 0 {
                 return Err(OperationError::new("Expected imply statement"));
             }
-            assert_eq!(len, 2);
+            assert_eq!(*len, 2);
             if el.len() != 2 {
                 return Err(OperationError::new("Imply statement incomplete"));
             }
-            self.stack.push(el.pop().unwrap());
+            self.stack.push(el[1].clone());
             Ok(())
         } else {
             Err(OperationError::new("Expected imply statement"))
