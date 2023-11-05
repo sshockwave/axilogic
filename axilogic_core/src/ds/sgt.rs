@@ -27,9 +27,12 @@ struct Node<T: Ord> {
 
 impl<T: Ord> Node<T> {
   fn balanced(&self, delta_l: usize, delta_r: usize) -> bool {
-    let l = self.left.root.as_ref().map(|v| v.size).unwrap_or(0) + delta_l;
-    let r = self.right.root.as_ref().map(|v| v.size).unwrap_or(0) + delta_r;
+    let l = self.left.len() + delta_l;
+    let r = self.right.len() + delta_r;
     self.size * 3 > l * 5 && self.size * 3 > r * 5
+  }
+  fn update(&mut self) {
+    self.size = self.left.len() + self.right.len() + 1;
   }
 }
 
@@ -41,30 +44,64 @@ impl<T: Ord> Tree<T> {
   pub fn new() -> Self {
     Tree { root: None }
   }
+  pub fn len(&self) -> usize {
+    return self.root.as_ref().map_or(0, |v| v.size);
+  }
   fn mid_point(l: usize, r: usize) -> usize {
     l + (r - l) / 2
   }
-  fn rebuild(&mut self, intv: (usize, usize)) {
-    todo!()
+  fn dfs_push(node: &mut Option<Box<Node<T>>>, vec: &mut Vec<Rc<Info<T>>>) {
+    if let Some(mut x) = node.take() {
+      Self::dfs_push(&mut x.left.root, vec);
+      if Rc::strong_count(&x.info) > 1 {
+        vec.push(x.info);
+      }
+      Self::dfs_push(&mut x.right.root, vec);
+    }
   }
-  fn insert_node(&mut self, value: T, intv: (usize, usize), will_rebuild: bool) -> Rc<Info<T>> {
+  fn dfs_build(vec: &[Rc<Info<T>>], (key_l, key_r): (usize, usize)) -> Tree<T> {
+    if vec.is_empty() {
+      return Tree::new();
+    }
+    let m = vec.len() / 2;
+    let key_m = Self::mid_point(key_l, key_r);
+    let rc = vec[m].clone();
+    rc.as_ref().key.replace(key_m);
+    Tree {
+      root: Some(Box::new(Node {
+        left: Self::dfs_build(&vec[..m], (key_l, key_m - 1)),
+        right: Self::dfs_build(&vec[m + 1..], (key_m + 1, key_r)),
+        info: rc,
+        size: vec.len(),
+      })),
+    }
+  }
+  fn rebuild(&mut self, intv: (usize, usize)) {
+    let mut vec = Vec::new();
+    Self::dfs_push(&mut self.root, &mut vec);
+    *self = Self::dfs_build(&vec, intv);
+  }
+  fn insert_node(&mut self, value: T, (l, r): (usize, usize), will_rebuild: bool) -> Rc<Info<T>> {
     if let Some(v) = self.root.as_mut() {
       use std::cmp::Ordering::*;
       let t = value.cmp(&v.info.value);
-      let (delta_l, delta_r, child, intv) = match t {
+      let (balanced, child, intv) = match t {
         Equal => return v.info.clone(),
-        Less => (1, 0, &mut v.left, (intv.0, *v.info.key.borrow())),
-        Greater => (0, 1, &mut v.right, (*v.info.key.borrow(), intv.1)),
+        Less => (v.balanced(1, 0), &mut v.left, (l, *v.info.key.borrow() - 1)),
+        Greater => (v.balanced(0, 1), &mut v.right, (*v.info.key.borrow() + 1, r)),
       };
-      let rebuild = !will_rebuild && !v.balanced(delta_l, delta_r);
-      let info = Self::insert_node(child, value, intv, will_rebuild || rebuild);
-      if rebuild {
-        self.rebuild(intv);
+      let info = Self::insert_node(child, value, intv, !balanced);
+      if !will_rebuild {
+        if !balanced {
+          self.rebuild(intv);
+        } else if !will_rebuild {
+          v.update();
+        }
       }
       info
     } else {
       let info = Rc::new(Info {
-        key: RefCell::new(Self::mid_point(intv.0, intv.1)),
+        key: RefCell::new(Self::mid_point(l, r)),
         value,
       });
       self.root = Some(Box::new(Node {
