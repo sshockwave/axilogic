@@ -52,6 +52,10 @@ pub struct Tree<K: Clone, I: SearchInfo<K>> {
     height: usize, // the black height of the tree
 }
 
+pub struct Iter<'a, K: Clone, I: SearchInfo<K>> {
+    stack: Vec<&'a Node<K, I>>,
+}
+
 impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
     fn update(&mut self) {
         self.info = I::new(
@@ -386,5 +390,30 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                 right,
             ),
         }
+    }
+    pub fn iter(&self) -> Iter<'_, K, I> {
+        let mut iter = Iter {
+            stack: Vec::new(),
+        };
+        iter.push_all_left(&self.tree);
+        iter
+    }
+}
+
+impl<'a, K: Clone + 'a, I: SearchInfo<K>> Iter<'a, K, I> {
+    fn push_all_left(&mut self, mut x: &'a SubTree<K, I>) {
+        while let Some(v) = x.root.as_ref() {
+            self.stack.push(v.as_ref());
+            x = &v.left;
+        }
+    }
+}
+
+impl<'a, K: Clone + 'a, I: SearchInfo<K>> Iterator for Iter<'a, K, I> {
+    type Item = &'a K;
+    fn next(&mut self) -> Option<Self::Item> {
+        let cur = self.stack.pop()?;
+        self.push_all_left(&cur.right);
+        Some(&cur.key)
     }
 }
