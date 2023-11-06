@@ -35,15 +35,21 @@ struct Node<K: Clone, I: SearchInfo<K>> {
     key: K,
     info: I,
     color: Color,
-    left: Tree<K, I>,
-    right: Tree<K, I>,
+    left: SubTree<K, I>,
+    right: SubTree<K, I>,
 }
 
 /// Requirements:
 /// 1. A red node does not have a red child
 /// 2. Every path from root to leaf has the same number of black nodes
-pub struct Tree<K: Clone, I: SearchInfo<K>> {
+pub struct SubTree<K: Clone, I: SearchInfo<K>> {
     root: Option<Rc<Node<K, I>>>,
+}
+
+#[derive(Clone)]
+pub struct Tree<K: Clone, I: SearchInfo<K>> {
+    tree: SubTree<K, I>,
+    height: usize, // the black height of the tree
 }
 
 impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
@@ -68,40 +74,43 @@ impl<K: Clone, I: SearchInfo<K>> Clone for Node<K, I> {
     }
 }
 
-impl<K: Clone, I: SearchInfo<K>> Clone for Tree<K, I> {
+impl<K: Clone, I: SearchInfo<K>> Clone for SubTree<K, I> {
     fn clone(&self) -> Self {
-        Tree {
+        SubTree {
             root: self.root.clone(),
         }
     }
 }
 
-impl<K: Clone, I: SearchInfo<K>> From<Node<K, I>> for Tree<K, I> {
+impl<K: Clone, I: SearchInfo<K>> From<Node<K, I>> for SubTree<K, I> {
     fn from(value: Node<K, I>) -> Self {
-        Tree {
+        SubTree {
             root: Some(Rc::new(value)),
         }
     }
 }
 
-impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
+impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
+    fn rotate_left(&mut self, right_child: Node<K, I>) {
+        let mut left_child = std::mem::replace(self, right_child);
+        std::mem::swap(&mut left_child.right, &mut self.left);
+        left_child.update();
+        self.left = left_child.into();
+    }
+    fn rotate_right(&mut self, left_child: Node<K, I>) {
+        let mut right_child = std::mem::replace(self, left_child);
+        std::mem::swap(&mut self.right, &mut right_child.left);
+        right_child.update();
+        self.right = right_child.into();
+    }
+}
+
+impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
     pub fn new() -> Self {
-        Tree { root: None }
+        SubTree { root: None }
     }
     fn root_color(&self) -> &Color {
         self.root.as_ref().map_or(&Color::Black, |x| &x.color)
-    }
-    fn rotate_left(node: &mut Node<K, I>, right_child: Node<K, I>) {
-        let mut left_child = std::mem::replace(node, right_child);
-        std::mem::swap(&mut left_child.right, &mut node.left);
-        left_child.update();
-        node.left = left_child.into();
-    }
-    fn rotate_right(node: &mut Node<K, I>, left_child: Node<K, I>) {
-        let mut right_child = std::mem::replace(node, left_child);
-        std::mem::swap(&mut node.right, &mut right_child.left);
-        right_child.update();
-        node.right = right_child.into();
     }
     // Returns whether the resulting tree is higher than the original child (in terms of black height)
     fn insert_fixup(
@@ -137,8 +146,8 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             }
             (SingleRed, Color::Red, Some((self_side, Color::Black))) => {
                 match (self_side, child_side) {
-                    (Side::Left, Side::Right) => Self::rotate_left(&mut node, child_node),
-                    (Side::Right, Side::Left) => Self::rotate_right(&mut node, child_node),
+                    (Side::Left, Side::Right) => node.rotate_left(child_node),
+                    (Side::Right, Side::Left) => node.rotate_right(child_node),
                     _ => {}
                 }
                 (TwoRed, false)
@@ -155,8 +164,8 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             (TwoRed, Color::Black, _) => {
                 node.color = Color::Red;
                 match child_side {
-                    Side::Left => Self::rotate_right(&mut node, child_node),
-                    Side::Right => Self::rotate_left(&mut node, child_node),
+                    Side::Left => node.rotate_right(child_node),
+                    Side::Right => node.rotate_left(child_node),
                 }
                 node.color = Color::Black;
                 (Resolved, true)
@@ -185,8 +194,8 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                     key,
                     info,
                     color: Color::Red,
-                    left: Tree::new(),
-                    right: Tree::new(),
+                    left: SubTree::new(),
+                    right: SubTree::new(),
                 },
                 false,
             );
@@ -214,14 +223,6 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             parent_data,
         )
     }
-    pub fn set(&mut self, key: impl Searcher<K, I> + Into<K>) {
-        let (state, node, _) = self.insert_node(key, None);
-        assert!(matches!(
-            state,
-            InsertState::Resolved | InsertState::SingleRed
-        ));
-        *self = node.into();
-    }
     pub fn get(&self, mut key: impl Searcher<K, I>) -> Option<&K> {
         let node = if let Some(x) = self.root.as_ref() {
             x.as_ref()
@@ -235,19 +236,19 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         }
     }
     fn join_nodes(
-        (left, left_bh): (Self, usize),
+        left: Tree<K, I>,
         mid: K,
-        (right, right_bh): (Self, usize),
+        right: Tree<K, I>,
         parent_data: Option<(&Side, &Color)>,
-    ) -> (InsertState, Node<K, I>, bool) {
+    ) -> (InsertState, Node<K, I>, usize) {
         use InsertState::*;
-        let child_side = match left_bh.cmp(&right_bh) {
-            Equal => match (left.root_color(), right.root_color()) {
+        let child_side = match left.height.cmp(&right.height) {
+            Equal => match (left.tree.root_color(), right.tree.root_color()) {
                 (Color::Black, Color::Black) => {
                     let info = I::new(
-                        left.root.as_ref().map(|x| &x.info),
+                        left.tree.root.as_ref().map(|x| &x.info),
                         &mid,
-                        right.root.as_ref().map(|x| &x.info),
+                        right.tree.root.as_ref().map(|x| &x.info),
                     );
                     return (
                         SingleRed,
@@ -255,10 +256,10 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                             key: mid,
                             info,
                             color: Color::Red,
-                            left,
-                            right,
+                            left: left.tree,
+                            right: right.tree,
                         },
-                        false,
+                        left.height,
                     );
                 }
                 (Color::Red, _) => Side::Right,
@@ -268,42 +269,66 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Greater => Side::Right,
         };
         let (node, node_bh) = match child_side {
-            Side::Left => (&right, right_bh),
-            Side::Right => (&left, left_bh),
+            Side::Left => (&right, right.height),
+            Side::Right => (&left, left.height),
         };
-        let node = node.root.as_ref().unwrap().as_ref().clone();
+        let node = node.tree.root.as_ref().unwrap().as_ref().clone();
         let child_bh = match node.color {
             Color::Black => node_bh - 1,
             Color::Red => node_bh,
         };
-        let (state, child_node, child_higher) = match child_side {
+        let (state, child_node, child_bh) = match child_side {
             Side::Left => Self::join_nodes(
-                (left, left_bh),
+                left,
                 mid,
-                (node.left.clone(), child_bh),
+                Tree {
+                    tree: node.left.clone(),
+                    height: child_bh,
+                },
                 Some((&child_side, node.right.root_color())),
             ),
             Side::Right => Self::join_nodes(
-                (node.right.clone(), child_bh),
+                Tree {
+                    tree: node.right.clone(),
+                    height: child_bh,
+                },
                 mid,
-                (right, right_bh),
+                right,
                 Some((&child_side, node.left.root_color())),
             ),
         };
-        Self::insert_fixup(
-            state,
-            node,
-            child_side,
-            child_node,
-            child_higher,
-            parent_data,
-        )
+        let (state, node, higher) =
+            Self::insert_fixup(state, node, child_side, child_node, false, parent_data);
+        (state, node, higher as usize + child_bh)
     }
-    fn split_nodes(&self, mut key: impl Searcher<K, I>) -> (usize, (Self, usize), (Self, usize)) {
-        let node = if let Some(x) = self.root.as_ref() {
+}
+
+impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
+    pub fn new() -> Self {
+        Tree {
+            tree: SubTree::new(),
+            height: 0,
+        }
+    }
+    pub fn set(&mut self, key: impl Searcher<K, I> + Into<K>) {
+        let (state, node, higher) = self.tree.insert_node(key, None);
+        assert!(matches!(
+            state,
+            InsertState::Resolved | InsertState::SingleRed
+        ));
+        self.tree = node.into();
+        if higher {
+            self.height += 1;
+        }
+    }
+    pub fn get(&self, key: impl Searcher<K, I>) -> Option<&K> {
+        self.tree.get(key)
+    }
+    pub fn cut(&self, mut key: impl Searcher<K, I>) -> (Tree<K, I>, Tree<K, I>) {
+        let node = if let Some(x) = self.tree.root.as_ref() {
             x
         } else {
-            return (0, (Tree::new(), 0), (Tree::new(), 0));
+            return (Tree::new(), Tree::new());
         };
         let child_side = match key.cmp(&node.key, &node.info) {
             Equal => unreachable!("Cannot split at existing node"),
@@ -314,28 +339,42 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Side::Left => &node.left,
             Side::Right => &node.right,
         };
-        let (child_bh, (mut left, mut left_bh), (mut right, mut right_bh)) = child.split_nodes(key);
+        let child_bh = match child.root_color() {
+            Color::Black => self.height - 1,
+            Color::Red => self.height,
+        };
+        let (mut left, mut right) = Tree {
+            tree: child.clone(),
+            height: child_bh,
+        }
+        .cut(key);
         let state = match child_side {
             Side::Left => {
-                let (state, right_node, merge_bh) = Self::join_nodes(
-                    (right, right_bh),
+                let (state, right_node, height) = SubTree::join_nodes(
+                    right.clone(),
                     node.key.clone(),
-                    (node.right.clone(), child_bh),
+                    Tree {
+                        tree: node.right.clone(),
+                        height: child_bh,
+                    },
                     None,
                 );
-                right = right_node.into();
-                right_bh = merge_bh;
+                right.tree = right_node.into();
+                right.height = height;
                 state
             }
             Side::Right => {
-                let (state, left_node, merge_bh) = Self::join_nodes(
-                    (node.left.clone(), child_bh),
+                let (state, left_node, height) = SubTree::join_nodes(
+                    Tree {
+                        tree: node.left.clone(),
+                        height: child_bh,
+                    },
                     node.key.clone(),
-                    (left, left_bh),
+                    left.clone(),
                     None,
                 );
-                left = left_node.into();
-                left_bh = merge_bh;
+                left.tree = left_node.into();
+                left.height = height;
                 state
             }
         };
@@ -343,14 +382,6 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             state,
             InsertState::Resolved | InsertState::SingleRed
         ));
-        (
-            if let Color::Black = node.color {
-                child_bh + 1
-            } else {
-                child_bh
-            },
-            (left, left_bh),
-            (right, right_bh),
-        )
+        (left, right)
     }
 }
