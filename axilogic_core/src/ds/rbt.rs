@@ -1,3 +1,5 @@
+/// A persistent Red-Black Tree
+/// https://sites.google.com/view/comparison-dynamic-bst/tango-trees/red-black-trees
 use std::{
     cmp::Ordering::{self, *},
     rc::Rc,
@@ -86,8 +88,8 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     pub fn new() -> Self {
         Tree { root: None }
     }
-    fn root_color(&self) -> Color {
-        self.root.as_ref().map_or(Color::Black, |x| x.color.clone())
+    fn root_color(&self) -> &Color {
+        self.root.as_ref().map_or(&Color::Black, |x| &x.color)
     }
     fn rotate_left(node: &mut Node<K, I>, right_child: Node<K, I>) {
         let mut left_child = std::mem::replace(node, right_child);
@@ -101,43 +103,19 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         right_child.update();
         node.right = right_child.into();
     }
-    fn insert_node(
-        &mut self,
-        mut inserter: impl Searcher<K, I> + Into<K>,
-        data: Option<(&Side, Color)>,
+    fn insert_fixup(
+        state: InsertState,
+        mut node: Node<K, I>,
+        child_side: Side,
+        child_node: Node<K, I>,
+        parent_data: Option<(&Side, &Color)>,
     ) -> (InsertState, Node<K, I>) {
-        let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
-            x.as_ref().clone()
-        } else {
-            let key = inserter.into();
-            let info = I::new(None, &key, None);
-            return (
-                SingleRed,
-                Node {
-                    key,
-                    info,
-                    color: Color::Red,
-                    left: Tree::new(),
-                    right: Tree::new(),
-                },
-            );
-        };
         use InsertState::*;
-        let child_side = match inserter.cmp(&node.key, &node.info) {
-            Equal => {
-                node.key = inserter.into();
-                return (Resolved, node);
-            }
-            Less => Side::Left,
-            Greater => Side::Right,
-        };
         let (child, other_child) = match child_side {
             Side::Left => (&mut node.left, &mut node.right),
             Side::Right => (&mut node.right, &mut node.left),
         };
-        let (state, child_node) =
-            child.insert_node(inserter, Some((&child_side, other_child.root_color())));
-        let state = match (state, &node.color, data) {
+        let state = match (state, &node.color, parent_data) {
             // (child state, this color, (this side, sibiling color))
             (Resolved, _, _) | (SingleRed, Color::Black, _) => {
                 *child = child_node.into();
@@ -187,6 +165,43 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         node.update();
         (state, node)
     }
+    fn insert_node(
+        &mut self,
+        mut inserter: impl Searcher<K, I> + Into<K>,
+        parent_data: Option<(&Side, &Color)>,
+    ) -> (InsertState, Node<K, I>) {
+        let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
+            x.as_ref().clone()
+        } else {
+            let key = inserter.into();
+            let info = I::new(None, &key, None);
+            return (
+                InsertState::SingleRed,
+                Node {
+                    key,
+                    info,
+                    color: Color::Red,
+                    left: Tree::new(),
+                    right: Tree::new(),
+                },
+            );
+        };
+        let child_side = match inserter.cmp(&node.key, &node.info) {
+            Equal => {
+                node.key = inserter.into();
+                return (InsertState::Resolved, node);
+            }
+            Less => Side::Left,
+            Greater => Side::Right,
+        };
+        let (child, other_child) = match child_side {
+            Side::Left => (&mut node.left, &mut node.right),
+            Side::Right => (&mut node.right, &mut node.left),
+        };
+        let (mut state, child_node) =
+            child.insert_node(inserter, Some((&child_side, other_child.root_color())));
+        Self::insert_fixup(state, node, child_side, child_node, parent_data)
+    }
     pub fn set(&mut self, key: impl Searcher<K, I> + Into<K>) {
         let (state, node) = self.insert_node(key, None);
         assert!(matches!(
@@ -206,5 +221,62 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Less => node.left.get(key),
             Greater => node.right.get(key),
         }
+    }
+    fn join_nodes(
+        (left, left_bh): (Self, usize),
+        mid: K,
+        (right, right_bh): (Self, usize),
+        parent_data: Option<(&Side, &Color)>,
+    ) -> (InsertState, Node<K, I>) {
+        use InsertState::*;
+        let child_side = match left_bh.cmp(&right_bh) {
+            Equal => match (left.root_color(), right.root_color()) {
+                (Color::Black, Color::Black) => {
+                    let info = I::new(
+                        left.root.as_ref().map(|x| &x.info),
+                        &mid,
+                        right.root.as_ref().map(|x| &x.info),
+                    );
+                    return (
+                        SingleRed,
+                        Node {
+                            key: mid,
+                            info,
+                            color: Color::Red,
+                            left,
+                            right,
+                        },
+                    );
+                }
+                (Color::Red, _) => Side::Right,
+                (Color::Black, Color::Red) => Side::Left,
+            },
+            Less => Side::Left,
+            Greater => Side::Right,
+        };
+        let (node, node_bh) = match child_side {
+            Side::Left => (&right, right_bh),
+            Side::Right => (&left, left_bh),
+        };
+        let mut node = node.root.as_ref().unwrap().as_ref().clone();
+        let child_bh = match node.color {
+            Color::Black => node_bh - 1,
+            Color::Red => node_bh,
+        };
+        let (mut state, child_node) = match child_side {
+            Side::Left => Self::join_nodes(
+                (left, left_bh),
+                mid,
+                (node.left.clone(), child_bh),
+                Some((&child_side, node.right.root_color())),
+            ),
+            Side::Right => Self::join_nodes(
+                (node.right.clone(), child_bh),
+                mid,
+                (right, right_bh),
+                Some((&child_side, node.left.root_color())),
+            ),
+        };
+        Self::insert_fixup(state, node, child_side, child_node, parent_data)
     }
 }
