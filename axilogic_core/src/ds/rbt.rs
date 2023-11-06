@@ -324,6 +324,20 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     pub fn get(&self, key: impl Searcher<K, I>) -> Option<&K> {
         self.tree.get(key)
     }
+    fn join(self, mid: K, right: Self) -> Self {
+        let (state, node, height) = SubTree::join_nodes(self, mid, right, None);
+        assert!(matches!(
+            state,
+            InsertState::Resolved | InsertState::SingleRed
+        ));
+        Tree {
+            tree: node.into(),
+            height,
+        }
+    }
+    pub fn cat(self, rhs: Self) -> Self {
+        todo!("delete in rbt");
+    }
     pub fn cut(&self, mut key: impl Searcher<K, I>) -> (Tree<K, I>, Tree<K, I>) {
         let node = if let Some(x) = self.tree.root.as_ref() {
             x
@@ -343,45 +357,34 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Color::Black => self.height - 1,
             Color::Red => self.height,
         };
-        let (mut left, mut right) = Tree {
+        let (left, right) = Tree {
             tree: child.clone(),
             height: child_bh,
         }
         .cut(key);
-        let state = match child_side {
-            Side::Left => {
-                let (state, right_node, height) = SubTree::join_nodes(
-                    right.clone(),
+        match child_side {
+            Side::Left => (
+                left,
+                Self::join(
+                    right,
                     node.key.clone(),
                     Tree {
                         tree: node.right.clone(),
                         height: child_bh,
                     },
-                    None,
-                );
-                right.tree = right_node.into();
-                right.height = height;
-                state
-            }
-            Side::Right => {
-                let (state, left_node, height) = SubTree::join_nodes(
+                ),
+            ),
+            Side::Right => (
+                Self::join(
                     Tree {
                         tree: node.left.clone(),
                         height: child_bh,
                     },
                     node.key.clone(),
-                    left.clone(),
-                    None,
-                );
-                left.tree = left_node.into();
-                left.height = height;
-                state
-            }
-        };
-        assert!(matches!(
-            state,
-            InsertState::Resolved | InsertState::SingleRed
-        ));
-        (left, right)
+                    left,
+                ),
+                right,
+            ),
+        }
     }
 }
