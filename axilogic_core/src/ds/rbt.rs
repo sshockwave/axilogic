@@ -9,7 +9,6 @@ enum Color {
     Black,
 }
 
-#[derive(Clone)]
 enum Side {
     Left,
     Right,
@@ -105,7 +104,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     fn insert_node(
         root: Option<Rc<Node<K, I>>>,
         mut inserter: impl Searcher<K, I> + Into<K>,
-        data: Option<(Side, Color)>,
+        data: Option<(&Side, Color)>,
     ) -> (InsertState, Node<K, I>) {
         let mut node = if let Some(x) = root {
             x.as_ref().clone()
@@ -135,7 +134,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         let (state, child_node) = Self::insert_node(
             std::mem::replace(&mut child.root, None),
             inserter,
-            Some((child_side.clone(), other_child.root_color())),
+            Some((&child_side, other_child.root_color())),
         );
         let state = match (state, node.color.clone(), data) {
             // (child state, this color, (this side, sibiling color))
