@@ -109,6 +109,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         mut node: Node<K, I>,
         child_side: Side,
         child_node: Node<K, I>,
+        child_higher: bool,
         parent_data: Option<(&Side, &Color)>,
     ) -> (InsertState, Node<K, I>, bool) {
         use InsertState::*;
@@ -116,6 +117,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Side::Left => (&mut node.left, &mut node.right),
             Side::Right => (&mut node.right, &mut node.left),
         };
+        assert!(!child_higher || matches!(state, InsertState::Resolved | InsertState::NewBlack));
         let (state, higher) = match (state, &node.color, parent_data) {
             // (child state, this color, (this side, sibiling color))
             (Resolved, _, _) | (SingleRed, Color::Black, _) => {
@@ -164,13 +166,14 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             }
         };
         node.update();
-        (state, node, higher)
+        assert!(!child_higher || !higher);
+        (state, node, child_higher || higher)
     }
     fn insert_node(
         &mut self,
         mut inserter: impl Searcher<K, I> + Into<K>,
         parent_data: Option<(&Side, &Color)>,
-    ) -> (InsertState, Node<K, I>) {
+    ) -> (InsertState, Node<K, I>, bool) {
         let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
             x.as_ref().clone()
         } else {
@@ -185,12 +188,13 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                     left: Tree::new(),
                     right: Tree::new(),
                 },
+                false,
             );
         };
         let child_side = match inserter.cmp(&node.key, &node.info) {
             Equal => {
                 node.key = inserter.into();
-                return (InsertState::Resolved, node);
+                return (InsertState::Resolved, node, false);
             }
             Less => Side::Left,
             Greater => Side::Right,
@@ -199,13 +203,19 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Side::Left => (&mut node.left, &mut node.right),
             Side::Right => (&mut node.right, &mut node.left),
         };
-        let (state, child_node) =
+        let (state, child_node, child_higher) =
             child.insert_node(inserter, Some((&child_side, other_child.root_color())));
-        let (state, node, _) = Self::insert_fixup(state, node, child_side, child_node, parent_data);
-        (state, node)
+        Self::insert_fixup(
+            state,
+            node,
+            child_side,
+            child_node,
+            child_higher,
+            parent_data,
+        )
     }
     pub fn set(&mut self, key: impl Searcher<K, I> + Into<K>) {
-        let (state, node) = self.insert_node(key, None);
+        let (state, node, _) = self.insert_node(key, None);
         assert!(matches!(
             state,
             InsertState::Resolved | InsertState::SingleRed
@@ -229,7 +239,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         mid: K,
         (right, right_bh): (Self, usize),
         parent_data: Option<(&Side, &Color)>,
-    ) -> (InsertState, Node<K, I>, usize) {
+    ) -> (InsertState, Node<K, I>, bool) {
         use InsertState::*;
         let child_side = match left_bh.cmp(&right_bh) {
             Equal => match (left.root_color(), right.root_color()) {
@@ -248,7 +258,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                             left,
                             right,
                         },
-                        left_bh,
+                        false,
                     );
                 }
                 (Color::Red, _) => Side::Right,
@@ -266,7 +276,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             Color::Black => node_bh - 1,
             Color::Red => node_bh,
         };
-        let (state, child_node, child_bh) = match child_side {
+        let (state, child_node, child_higher) = match child_side {
             Side::Left => Self::join_nodes(
                 (left, left_bh),
                 mid,
@@ -280,9 +290,14 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
                 Some((&child_side, node.left.root_color())),
             ),
         };
-        let (state, node, higher) =
-            Self::insert_fixup(state, node, child_side, child_node, parent_data);
-        (state, node, child_bh + higher as usize)
+        Self::insert_fixup(
+            state,
+            node,
+            child_side,
+            child_node,
+            child_higher,
+            parent_data,
+        )
     }
     fn split_nodes(&self, mut key: impl Searcher<K, I>) -> (usize, (Self, usize), (Self, usize)) {
         let node = if let Some(x) = self.root.as_ref() {
