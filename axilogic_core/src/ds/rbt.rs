@@ -1,5 +1,5 @@
 use std::{
-    cmp::{Ord, Ordering::*},
+    cmp::Ordering::{self, *},
     rc::Rc,
 };
 
@@ -22,40 +22,52 @@ enum InsertState {
     TwoRed,
 }
 
-struct Node<K: Ord, V> {
-    kv: Rc<(K, V)>,
+pub trait SearchInfo<K>: Clone {
+    fn new(left: Option<&Self>, key: &K, right: Option<&Self>) -> Self;
+}
+
+pub trait Searcher<K, I: SearchInfo<K>> {
+    fn cmp(&mut self, key: &K, info: &I) -> Ordering;
+}
+
+struct Node<K: Clone, I: SearchInfo<K>> {
+    key: K,
+    info: I,
     color: Color,
-    size: usize,
-    left: Tree<K, V>,
-    right: Tree<K, V>,
+    left: Tree<K, I>,
+    right: Tree<K, I>,
 }
 
 /// Requirements:
 /// 1. A red node does not have a red child
 /// 2. Every path from root to leaf has the same number of black nodes
-pub struct Tree<K: Ord, V> {
-    root: Option<Rc<Node<K, V>>>,
+pub struct Tree<K: Clone, I: SearchInfo<K>> {
+    root: Option<Rc<Node<K, I>>>,
 }
 
-impl<K: Ord, V> Node<K, V> {
+impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
     fn update(&mut self) {
-        self.size = self.left.size() + self.right.size() + 1;
+        self.info = I::new(
+            self.left.root.as_ref().map(|x| &x.info),
+            &self.key,
+            self.right.root.as_ref().map(|x| &x.info),
+        );
     }
 }
 
-impl<K: Ord, V> Clone for Node<K, V> {
+impl<K: Clone, I: SearchInfo<K>> Clone for Node<K, I> {
     fn clone(&self) -> Self {
         Node {
-            kv: self.kv.clone(),
+            key: self.key.clone(),
             color: self.color.clone(),
-            size: self.size,
+            info: self.info.clone(),
             left: self.left.clone(),
             right: self.right.clone(),
         }
     }
 }
 
-impl<K: Ord, V> Clone for Tree<K, V> {
+impl<K: Clone, I: SearchInfo<K>> Clone for Tree<K, I> {
     fn clone(&self) -> Self {
         Tree {
             root: self.root.clone(),
@@ -63,72 +75,66 @@ impl<K: Ord, V> Clone for Tree<K, V> {
     }
 }
 
-impl<K: Ord, V> From<Node<K, V>> for Tree<K, V> {
-    fn from(value: Node<K, V>) -> Self {
+impl<K: Clone, I: SearchInfo<K>> From<Node<K, I>> for Tree<K, I> {
+    fn from(value: Node<K, I>) -> Self {
         Tree {
             root: Some(Rc::new(value)),
         }
     }
 }
 
-impl<K: Ord, V> Tree<K, V> {
+impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     pub fn new() -> Self {
         Tree { root: None }
-    }
-    pub fn size(&self) -> usize {
-        self.root.as_ref().map_or(0, |x| x.size)
     }
     fn root_color(&self) -> Color {
         self.root.as_ref().map_or(Color::Black, |x| x.color.clone())
     }
-    fn rotate_left(node: &mut Node<K, V>, right_child: Node<K, V>) {
+    fn rotate_left(node: &mut Node<K, I>, right_child: Node<K, I>) {
         let mut left_child = std::mem::replace(node, right_child);
         std::mem::swap(&mut left_child.right, &mut node.left);
         left_child.update();
         node.left = left_child.into();
     }
-    fn rotate_right(node: &mut Node<K, V>, left_child: Node<K, V>) {
+    fn rotate_right(node: &mut Node<K, I>, left_child: Node<K, I>) {
         let mut right_child = std::mem::replace(node, left_child);
         std::mem::swap(&mut node.right, &mut right_child.left);
         right_child.update();
         node.right = right_child.into();
     }
     fn insert_node(
-        &self,
-        key: K,
-        value: V,
+        root: Option<Rc<Node<K, I>>>,
+        mut inserter: impl Searcher<K, I> + Into<K>,
         data: Option<(Side, Color)>,
-    ) -> (InsertState, Node<K, V>, Rc<(K, V)>) {
-        let node_rc = if let Some(x) = self.root.as_ref() {
-            x
+    ) -> (InsertState, Node<K, I>) {
+        let mut node = if let Some(x) = root {
+            x.as_ref().clone()
         } else {
-            let rc = Rc::new((key, value));
+            let key = inserter.into();
+            let info = I::new(None, &key, None);
             return (
                 SingleRed,
                 Node {
-                    kv: rc.clone(),
+                    key,
+                    info,
                     color: Color::Red,
-                    size: 1,
                     left: Tree::new(),
                     right: Tree::new(),
                 },
-                rc,
             );
         };
         use InsertState::*;
-        let mut node = node_rc.as_ref().clone();
-        let (child, other_child, child_side) = match key.cmp(&node_rc.kv.0) {
+        let (child, other_child, child_side) = match inserter.cmp(&node.key, &node.info) {
             Equal => {
-                let rc = Rc::new((key, value));
-                node.kv = rc.clone();
-                return (Resolved, node, rc);
+                node.key = inserter.into();
+                return (Resolved, node);
             }
             Less => (&mut node.left, &mut node.right, Side::Left),
             Greater => (&mut node.right, &mut node.left, Side::Right),
         };
-        let (state, child_node, rc) = child.insert_node(
-            key,
-            value,
+        let (state, child_node) = Self::insert_node(
+            std::mem::replace(&mut child.root, None),
+            inserter,
             Some((child_side.clone(), other_child.root_color())),
         );
         let state = match (state, node.color.clone(), data) {
@@ -157,8 +163,8 @@ impl<K: Ord, V> Tree<K, V> {
                 TwoRed
             }
             (NewBlack, Color::Black, _) => {
-                assert!(matches!(other_child.root_color(), Color::Red));
                 let mut other_child_node = other_child.root.as_ref().unwrap().as_ref().clone();
+                assert!(matches!(other_child_node.color, Color::Red));
                 other_child_node.color = Color::Black;
                 *child = child_node.into();
                 *other_child = other_child_node.into();
@@ -179,12 +185,26 @@ impl<K: Ord, V> Tree<K, V> {
             }
         };
         node.update();
-        (state, node, rc)
+        (state, node)
     }
-    pub fn insert(&mut self, key: K, value: V) -> Rc<(K, V)> {
-        let (state, node, rc) = self.insert_node(key, value, None);
-        assert!(matches!(state, InsertState::Resolved));
-        self.root = Some(Rc::new(node));
-        rc
+    pub fn insert(&mut self, inserter: impl Searcher<K, I> + Into<K>) {
+        let (state, node) = Self::insert_node(std::mem::replace(&mut self.root, None), inserter, None);
+        assert!(matches!(
+            state,
+            InsertState::Resolved | InsertState::SingleRed
+        ));
+        *self = node.into();
+    }
+    pub fn get(&self, mut key: impl Searcher<K, I>) -> Option<&K> {
+        let node = if let Some(x) = self.root.as_ref() {
+            x.as_ref()
+        } else {
+            return None;
+        };
+        match key.cmp(&node.key, &node.info) {
+            Equal => Some(&node.key),
+            Less => node.left.get(key),
+            Greater => node.right.get(key),
+        }
     }
 }
