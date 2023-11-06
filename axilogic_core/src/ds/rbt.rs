@@ -81,79 +81,11 @@ impl<K: Ord, V> Tree<K, V> {
         value: V,
         data: Option<(Side, Color)>,
     ) -> (InsertState, Node<K, V>, Rc<(K, V)>) {
-        use InsertState::*;
-        if let Some(node_rc) = self.root.as_ref() {
-            let mut node = node_rc.as_ref().clone();
-            let (child, other_child, child_side) = match key.cmp(&node_rc.kv.0) {
-                Equal => {
-                    let rc = Rc::new((key, value));
-                    node.kv = rc.clone();
-                    return (Resolved, node, rc);
-                }
-                Less => (&mut node.left, &mut node.right, Side::Left),
-                Greater => (&mut node.right, &mut node.left, Side::Right),
-            };
-            let (state, child_node, rc) = child.insert_node(
-                key,
-                value,
-                Some((child_side.clone(), other_child.root_color())),
-            );
-            let state = match (state, node.color.clone(), data) {
-                // (child state, this color, (this side, sibiling color))
-                (Resolved, _, _) | (SingleRed, Color::Black, _) => {
-                    child.root = Some(Rc::new(child_node));
-                    node.update();
-                    Resolved
-                }
-                (SingleRed, Color::Red, None) => {
-                    // This is the root
-                    child.root = Some(Rc::new(child_node));
-                    node.color = Color::Black;
-                    node.update();
-                    Resolved
-                }
-                (SingleRed, Color::Red, Some((_, Color::Red))) => {
-                    child.root = Some(Rc::new(child_node));
-                    node.color = Color::Black;
-                    node.update();
-                    NewBlack
-                }
-                (SingleRed, Color::Red, Some((self_side, Color::Black))) => {
-                    match (self_side, child_side) {
-                        (Side::Left, Side::Right) => Self::rotate_left(&mut node, child_node),
-                        (Side::Right, Side::Left) => Self::rotate_right(&mut node, child_node),
-                        _ => {}
-                    }
-                    TwoRed
-                }
-                (NewBlack, Color::Black, _) => {
-                    child.root = Some(Rc::new(child_node));
-                    assert!(matches!(other_child.root_color(), Color::Red));
-                    let mut other_child_node = other_child.root.as_ref().unwrap().as_ref().clone();
-                    other_child_node.color = Color::Black;
-                    other_child.root = Some(Rc::new(other_child_node));
-                    node.color = Color::Red;
-                    node.update();
-                    SingleRed
-                }
-                (TwoRed, Color::Black, _) => {
-                    node.color = Color::Red;
-                    match child_side {
-                        Side::Left => Self::rotate_right(&mut node, child_node),
-                        Side::Right => Self::rotate_left(&mut node, child_node),
-                    }
-                    node.color = Color::Black;
-                    Resolved
-                }
-                (NewBlack | TwoRed, Color::Red, _) => {
-                    unreachable!("Red node cannot have red child")
-                }
-            };
-            node.update();
-            (state, node, rc)
+        let node_rc = if let Some(x) = self.root.as_ref() {
+            x
         } else {
             let rc = Rc::new((key, value));
-            (
+            return (
                 SingleRed,
                 Node {
                     kv: rc.clone(),
@@ -163,8 +95,77 @@ impl<K: Ord, V> Tree<K, V> {
                     right: Tree::new(),
                 },
                 rc,
-            )
-        }
+            );
+        };
+        use InsertState::*;
+        let mut node = node_rc.as_ref().clone();
+        let (child, other_child, child_side) = match key.cmp(&node_rc.kv.0) {
+            Equal => {
+                let rc = Rc::new((key, value));
+                node.kv = rc.clone();
+                return (Resolved, node, rc);
+            }
+            Less => (&mut node.left, &mut node.right, Side::Left),
+            Greater => (&mut node.right, &mut node.left, Side::Right),
+        };
+        let (state, child_node, rc) = child.insert_node(
+            key,
+            value,
+            Some((child_side.clone(), other_child.root_color())),
+        );
+        let state = match (state, node.color.clone(), data) {
+            // (child state, this color, (this side, sibiling color))
+            (Resolved, _, _) | (SingleRed, Color::Black, _) => {
+                child.root = Some(Rc::new(child_node));
+                node.update();
+                Resolved
+            }
+            (SingleRed, Color::Red, None) => {
+                // This is the root
+                child.root = Some(Rc::new(child_node));
+                node.color = Color::Black;
+                node.update();
+                Resolved
+            }
+            (SingleRed, Color::Red, Some((_, Color::Red))) => {
+                child.root = Some(Rc::new(child_node));
+                node.color = Color::Black;
+                node.update();
+                NewBlack
+            }
+            (SingleRed, Color::Red, Some((self_side, Color::Black))) => {
+                match (self_side, child_side) {
+                    (Side::Left, Side::Right) => Self::rotate_left(&mut node, child_node),
+                    (Side::Right, Side::Left) => Self::rotate_right(&mut node, child_node),
+                    _ => {}
+                }
+                TwoRed
+            }
+            (NewBlack, Color::Black, _) => {
+                child.root = Some(Rc::new(child_node));
+                assert!(matches!(other_child.root_color(), Color::Red));
+                let mut other_child_node = other_child.root.as_ref().unwrap().as_ref().clone();
+                other_child_node.color = Color::Black;
+                other_child.root = Some(Rc::new(other_child_node));
+                node.color = Color::Red;
+                node.update();
+                SingleRed
+            }
+            (TwoRed, Color::Black, _) => {
+                node.color = Color::Red;
+                match child_side {
+                    Side::Left => Self::rotate_right(&mut node, child_node),
+                    Side::Right => Self::rotate_left(&mut node, child_node),
+                }
+                node.color = Color::Black;
+                Resolved
+            }
+            (NewBlack | TwoRed, Color::Red, _) => {
+                unreachable!("Red node cannot have red child")
+            }
+        };
+        node.update();
+        (state, node, rc)
     }
     pub fn insert(&mut self, key: K, value: V) -> Rc<(K, V)> {
         let (state, node, rc) = self.insert_node(key, value, None);
