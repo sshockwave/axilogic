@@ -63,6 +63,14 @@ impl<K: Ord, V> Clone for Tree<K, V> {
     }
 }
 
+impl<K: Ord, V> From<Node<K, V>> for Tree<K, V> {
+    fn from(value: Node<K, V>) -> Self {
+        Tree {
+            root: Some(Rc::new(value)),
+        }
+    }
+}
+
 impl<K: Ord, V> Tree<K, V> {
     pub fn new() -> Self {
         Tree { root: None }
@@ -73,8 +81,18 @@ impl<K: Ord, V> Tree<K, V> {
     fn root_color(&self) -> Color {
         self.root.as_ref().map_or(Color::Black, |x| x.color.clone())
     }
-    fn rotate_left(node: &mut Node<K, V>, right_child: Node<K, V>) {}
-    fn rotate_right(node: &mut Node<K, V>, left_child: Node<K, V>) {}
+    fn rotate_left(node: &mut Node<K, V>, right_child: Node<K, V>) {
+        let mut left_child = std::mem::replace(node, right_child);
+        std::mem::swap(&mut left_child.right, &mut node.left);
+        left_child.update();
+        node.left = left_child.into();
+    }
+    fn rotate_right(node: &mut Node<K, V>, left_child: Node<K, V>) {
+        let mut right_child = std::mem::replace(node, left_child);
+        std::mem::swap(&mut node.right, &mut right_child.left);
+        right_child.update();
+        node.right = right_child.into();
+    }
     fn insert_node(
         &self,
         key: K,
@@ -116,21 +134,18 @@ impl<K: Ord, V> Tree<K, V> {
         let state = match (state, node.color.clone(), data) {
             // (child state, this color, (this side, sibiling color))
             (Resolved, _, _) | (SingleRed, Color::Black, _) => {
-                child.root = Some(Rc::new(child_node));
-                node.update();
+                *child = child_node.into();
                 Resolved
             }
             (SingleRed, Color::Red, None) => {
                 // This is the root
-                child.root = Some(Rc::new(child_node));
+                *child = child_node.into();
                 node.color = Color::Black;
-                node.update();
                 Resolved
             }
             (SingleRed, Color::Red, Some((_, Color::Red))) => {
-                child.root = Some(Rc::new(child_node));
+                *child = child_node.into();
                 node.color = Color::Black;
-                node.update();
                 NewBlack
             }
             (SingleRed, Color::Red, Some((self_side, Color::Black))) => {
@@ -142,13 +157,12 @@ impl<K: Ord, V> Tree<K, V> {
                 TwoRed
             }
             (NewBlack, Color::Black, _) => {
-                child.root = Some(Rc::new(child_node));
                 assert!(matches!(other_child.root_color(), Color::Red));
                 let mut other_child_node = other_child.root.as_ref().unwrap().as_ref().clone();
                 other_child_node.color = Color::Black;
-                other_child.root = Some(Rc::new(other_child_node));
+                *child = child_node.into();
+                *other_child = other_child_node.into();
                 node.color = Color::Red;
-                node.update();
                 SingleRed
             }
             (TwoRed, Color::Black, _) => {
