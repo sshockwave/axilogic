@@ -102,11 +102,11 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         node.right = right_child.into();
     }
     fn insert_node(
-        root: Option<Rc<Node<K, I>>>,
+        &mut self,
         mut inserter: impl Searcher<K, I> + Into<K>,
         data: Option<(&Side, Color)>,
     ) -> (InsertState, Node<K, I>) {
-        let mut node = if let Some(x) = root {
+        let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
             x.as_ref().clone()
         } else {
             let key = inserter.into();
@@ -123,20 +123,21 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             );
         };
         use InsertState::*;
-        let (child, other_child, child_side) = match inserter.cmp(&node.key, &node.info) {
+        let child_side = match inserter.cmp(&node.key, &node.info) {
             Equal => {
                 node.key = inserter.into();
                 return (Resolved, node);
             }
-            Less => (&mut node.left, &mut node.right, Side::Left),
-            Greater => (&mut node.right, &mut node.left, Side::Right),
+            Less => Side::Left,
+            Greater => Side::Right,
         };
-        let (state, child_node) = Self::insert_node(
-            std::mem::replace(&mut child.root, None),
-            inserter,
-            Some((&child_side, other_child.root_color())),
-        );
-        let state = match (state, node.color.clone(), data) {
+        let (child, other_child) = match child_side {
+            Side::Left => (&mut node.left, &mut node.right),
+            Side::Right => (&mut node.right, &mut node.left),
+        };
+        let (state, child_node) =
+            child.insert_node(inserter, Some((&child_side, other_child.root_color())));
+        let state = match (state, &node.color, data) {
             // (child state, this color, (this side, sibiling color))
             (Resolved, _, _) | (SingleRed, Color::Black, _) => {
                 *child = child_node.into();
@@ -186,8 +187,8 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         node.update();
         (state, node)
     }
-    pub fn insert(&mut self, inserter: impl Searcher<K, I> + Into<K>) {
-        let (state, node) = Self::insert_node(std::mem::replace(&mut self.root, None), inserter, None);
+    pub fn set(&mut self, key: impl Searcher<K, I> + Into<K>) {
+        let (state, node) = self.insert_node(key, None);
         assert!(matches!(
             state,
             InsertState::Resolved | InsertState::SingleRed
