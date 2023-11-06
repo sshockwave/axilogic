@@ -19,8 +19,7 @@ enum InsertState {
     Resolved,
     SingleRed,
     NewBlack,
-    TwoLeftRed,
-    TwoRightRed,
+    TwoRed,
 }
 
 struct Node<K: Ord, V> {
@@ -74,8 +73,8 @@ impl<K: Ord, V> Tree<K, V> {
     fn root_color(&self) -> Color {
         self.root.as_ref().map_or(Color::Black, |x| x.color.clone())
     }
-    fn rotate_left(node: &mut Node<K, V>, right_child: &mut Node<K, V>) {}
-    fn rotate_right(node: &mut Node<K, V>, left_child: &mut Node<K, V>) {}
+    fn rotate_left(node: &mut Node<K, V>, right_child: Node<K, V>) {}
+    fn rotate_right(node: &mut Node<K, V>, left_child: Node<K, V>) {}
     fn insert_node(
         &self,
         key: K,
@@ -94,64 +93,64 @@ impl<K: Ord, V> Tree<K, V> {
                 Less => (&mut node.left, &mut node.right, Side::Left),
                 Greater => (&mut node.right, &mut node.left, Side::Right),
             };
-            let (state, mut child_node, rc) =
-                child.insert_node(key, value, Some((child_side.clone(), other_child.root_color())));
-            match (state, node.color.clone(), data) {
+            let (state, child_node, rc) = child.insert_node(
+                key,
+                value,
+                Some((child_side.clone(), other_child.root_color())),
+            );
+            let state = match (state, node.color.clone(), data) {
                 // (child state, this color, (this side, sibiling color))
                 (Resolved, _, _) | (SingleRed, Color::Black, _) => {
                     child.root = Some(Rc::new(child_node));
                     node.update();
-                    (Resolved, node, rc)
+                    Resolved
                 }
                 (SingleRed, Color::Red, None) => {
                     // This is the root
                     child.root = Some(Rc::new(child_node));
                     node.color = Color::Black;
                     node.update();
-                    (Resolved, node, rc)
+                    Resolved
                 }
                 (SingleRed, Color::Red, Some((_, Color::Red))) => {
                     child.root = Some(Rc::new(child_node));
                     node.color = Color::Black;
                     node.update();
-                    (NewBlack, node, rc)
+                    NewBlack
                 }
-                (SingleRed, Color::Red, Some((Side::Left, Color::Black))) => {
-                    if let Side::Right = child_side {
-                        Self::rotate_left(&mut node, &mut child_node);
+                (SingleRed, Color::Red, Some((self_side, Color::Black))) => {
+                    match (self_side, child_side) {
+                        (Side::Left, Side::Right) => Self::rotate_left(&mut node, child_node),
+                        (Side::Right, Side::Left) => Self::rotate_right(&mut node, child_node),
+                        _ => {}
                     }
-                    (TwoLeftRed, node, rc)
-                }
-                (SingleRed, Color::Red, Some((Side::Right, Color::Black))) => {
-                    if let Side::Left = child_side {
-                        Self::rotate_right(&mut node, &mut child_node);
-                    }
-                    (TwoRightRed, node, rc)
+                    TwoRed
                 }
                 (NewBlack, Color::Black, _) => {
+                    child.root = Some(Rc::new(child_node));
                     assert!(matches!(other_child.root_color(), Color::Red));
                     let mut other_child_node = other_child.root.as_ref().unwrap().as_ref().clone();
                     other_child_node.color = Color::Black;
-                    *other_child = Tree {
-                        root: Some(Rc::new(other_child_node)),
-                    };
+                    other_child.root = Some(Rc::new(other_child_node));
                     node.color = Color::Red;
-                    (SingleRed, node, rc)
+                    node.update();
+                    SingleRed
                 }
-                (TwoLeftRed, Color::Black, _) => {
-                    Self::rotate_right(&mut node, &mut child_node);
+                (TwoRed, Color::Black, _) => {
+                    node.color = Color::Red;
+                    match child_side {
+                        Side::Left => Self::rotate_right(&mut node, child_node),
+                        Side::Right => Self::rotate_left(&mut node, child_node),
+                    }
                     node.color = Color::Black;
-                    (Resolved, node, rc)
+                    Resolved
                 }
-                (TwoRightRed, Color::Black, _) => {
-                    Self::rotate_right(&mut node, &mut child_node);
-                    node.color = Color::Black;
-                    (Resolved, node, rc)
-                }
-                (NewBlack | TwoLeftRed | TwoRightRed, Color::Red, _) => {
+                (NewBlack | TwoRed, Color::Red, _) => {
                     unreachable!("Red node cannot have red child")
                 }
-            }
+            };
+            node.update();
+            (state, node, rc)
         } else {
             let rc = Rc::new((key, value));
             (
