@@ -320,17 +320,13 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                 right: SubTree::new(),
             });
         };
-        let child_side = match inserter.cmp(&node.key, &node.info) {
+        let (child, child_side) = match inserter.cmp(&node.key, &node.info) {
             Equal => {
                 node.key = inserter.into();
                 return InsertState::Resolved(node);
             }
-            Less => Side::Left,
-            Greater => Side::Right,
-        };
-        let child = match child_side {
-            Side::Left => &mut node.left,
-            Side::Right => &mut node.right,
+            Less => (&mut node.left, Side::Left),
+            Greater => (&mut node.right, Side::Right),
         };
         let state = child.insert_node(inserter);
         Self::set_fixup(node, state, child_side)
@@ -403,6 +399,26 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             ),
         };
         Self::set_fixup(node, state, child_side)
+    }
+    fn del(&mut self, mut key: impl Searcher<K, I>) -> DeleteState {
+        use DeleteState::*;
+        let mut node = if let Some(x) = self.root.as_mut() {
+            x.as_ref().clone()
+        } else {
+            return Resolved;
+        };
+        let (child, child_side) = match key.cmp(&node.key, &node.info) {
+            Equal => {
+                self.root = None;
+                return DoubleBlack;
+            }
+            Less => (&mut node.left, Side::Left),
+            Greater => (&mut node.right, Side::Right),
+        };
+        let state = child.del(key);
+        let state = node.del_fixup(state, &child_side);
+        *self = node.into();
+        state
     }
 }
 
