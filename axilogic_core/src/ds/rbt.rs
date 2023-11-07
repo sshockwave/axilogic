@@ -445,7 +445,6 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                         *self = node.into();
                         Some((DeleteState::Resolved, key))
                     } else {
-                        self.root = None;
                         Some((DeleteState::DoubleBlack, key))
                     }
                 }
@@ -461,8 +460,35 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
         };
         let (child, child_side) = match key.cmp(&node.key, &node.info) {
             Equal => {
-                // TODO remove from right
-                return DoubleBlack;
+                let pop_state = node.right.pop_front();
+                return match pop_state {
+                    Some((state, key)) => {
+                        node.key = key;
+                        let state = node.del_fixup(state, &Side::Right);
+                        *self = node.into();
+                        state
+                    }
+                    None => match node.color {
+                        Color::Red => {
+                            assert!(matches!(node.left.root, None));
+                            assert!(matches!(node.right.root, None));
+                            self.root = None;
+                            Resolved
+                        }
+                        Color::Black => {
+                            *self = node.left;
+                            if let Some(node) = self.root.as_ref() {
+                                let mut node = node.as_ref().clone();
+                                assert!(matches!(node.color, Color::Red));
+                                node.color = Color::Black;
+                                *self = node.into();
+                                Resolved
+                            } else {
+                                DoubleBlack
+                            }
+                        }
+                    }
+                };
             }
             Less => (&mut node.left, Side::Left),
             Greater => (&mut node.right, Side::Right),
@@ -491,6 +517,13 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     pub fn get(&self, key: impl Searcher<K, I>) -> Option<&K> {
         self.tree.get(key)
     }
+    pub fn del(&mut self, key: impl Searcher<K, I>) {
+        let state = self.tree.del(key);
+        match state {
+            DeleteState::DoubleBlack => self.height -= 1,
+            DeleteState::Resolved => {}
+        }
+    }
     fn join(self, mid: K, right: Self) -> Self {
         let height = std::cmp::max(self.height, right.height);
         let state = SubTree::join_nodes(self, mid, right);
@@ -500,8 +533,12 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
             height,
         }
     }
-    pub fn cat(self, rhs: Self) -> Self {
-        todo!("delete in rbt");
+    pub fn cat(self, mut rhs: Self) -> Self {
+        if let Some((_, key)) = rhs.tree.pop_front() {
+            self.join(key, rhs)
+        } else {
+            self
+        }
     }
     pub fn cut(&self, mut key: impl Searcher<K, I>) -> (Tree<K, I>, Tree<K, I>) {
         let node = if let Some(x) = self.tree.root.as_ref() {
