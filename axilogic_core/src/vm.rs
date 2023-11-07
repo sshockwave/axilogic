@@ -1,13 +1,13 @@
-use std::{rc::Rc, collections::HashMap};
+use std::{collections::HashMap, rc::Rc};
 
-use crate::err::{Result, OperationError};
+use crate::err::{OperationError, Result};
 
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Element {
     Symbol,
     SymbolRef(usize), // Reference to a symbol, stack top is 0
     Universal(Rc<Element>),
-    Concept{
+    Concept {
         id: usize,
         len: usize,
         el: Vec<Rc<Element>>,
@@ -23,7 +23,7 @@ pub struct Concept {
 pub enum FinalElement {
     SymbolRef(usize),
     Universal(Rc<FinalElement>),
-    Concept{
+    Concept {
         def: Rc<Concept>,
         params: Vec<Rc<FinalElement>>,
     },
@@ -31,7 +31,7 @@ pub enum FinalElement {
 
 pub enum RefStats {
     Bounded,
-    Unbounded{
+    Unbounded {
         range: (usize, usize), // [min, max). All variables are bounded if min == max.
         shift: usize, // the range already considers the shift so the range can be used directly
     },
@@ -80,7 +80,7 @@ fn dfs_patch(f: Rc<Element>, v: Rc<Element>, level: usize) -> Rc<Element> {
             } else {
                 f
             }
-        },
+        }
         Universal(body) => {
             let new_body = dfs_patch(body.clone(), v, level + 1);
             if Rc::ptr_eq(&f, &new_body) {
@@ -88,9 +88,12 @@ fn dfs_patch(f: Rc<Element>, v: Rc<Element>, level: usize) -> Rc<Element> {
             } else {
                 Rc::new(Universal(new_body))
             }
-        },
+        }
         Concept { id, len, el } => {
-            let vec: Vec<_> = el.iter().map(|x| dfs_patch(x.clone(), v.clone(), level)).collect();
+            let vec: Vec<_> = el
+                .iter()
+                .map(|x| dfs_patch(x.clone(), v.clone(), level))
+                .collect();
             if vec.iter().zip(el.iter()).all(|(x, y)| Rc::ptr_eq(x, y)) {
                 f
             } else {
@@ -100,7 +103,7 @@ fn dfs_patch(f: Rc<Element>, v: Rc<Element>, level: usize) -> Rc<Element> {
                     el: vec,
                 })
             }
-        },
+        }
     }
 }
 
@@ -152,11 +155,13 @@ impl super::isa::ISA for Verifier {
         let el = match self.stack[i].as_ref() {
             Symbol => {
                 if let None = self.expression_line {
-                    return Err(OperationError::new("Cannot duplicate symbol outside expression mode"));
+                    return Err(OperationError::new(
+                        "Cannot duplicate symbol outside expression mode",
+                    ));
                 }
-                Rc::new(SymbolRef(count_symbol(&self.stack[(i+1)..])))
-            },
-            SymbolRef(i2) => Rc::new(SymbolRef(i2 + count_symbol(&self.stack[(i+1)..]))),
+                Rc::new(SymbolRef(count_symbol(&self.stack[(i + 1)..])))
+            }
+            SymbolRef(i2) => Rc::new(SymbolRef(i2 + count_symbol(&self.stack[(i + 1)..]))),
             _ => el.clone(),
         };
         self.stack.push(el);
@@ -179,16 +184,24 @@ impl super::isa::ISA for Verifier {
     fn forall(&mut self) -> Result<()> {
         let pred = self.pop_one()?;
         if let Element::Symbol = pred.as_ref() {
-            return Err(OperationError::new("Variable cannot be a predicate for the forall qualifier"));
+            return Err(OperationError::new(
+                "Variable cannot be a predicate for the forall qualifier",
+            ));
         }
         match self.pop_one()?.as_ref() {
             Element::Symbol => (),
-            _ => return Err(OperationError::new("Expected symbol when binding a forall qualifier")),
+            _ => {
+                return Err(OperationError::new(
+                    "Expected symbol when binding a forall qualifier",
+                ))
+            }
         }
         self.stack.push(Rc::new(Element::Universal(pred)));
         if let Some(i) = self.expression_line {
             if i == self.stack.len() {
-                return Err(OperationError::new("The quantifier is not in expression mode but the predicate is"));
+                return Err(OperationError::new(
+                    "The quantifier is not in expression mode but the predicate is",
+                ));
             }
         }
         Ok(())
@@ -205,19 +218,33 @@ impl super::isa::ISA for Verifier {
             Universal(pred) => self.stack.push(dfs_patch(pred.clone(), v, 0)),
             Concept { id, len, el } => {
                 if *len == el.len() {
-                    return Err(OperationError::new("The concept has already been fully applied"));
+                    return Err(OperationError::new(
+                        "The concept has already been fully applied",
+                    ));
                 }
                 let mut el = el.clone();
                 el.push(v);
-                self.stack.push(Rc::new(Concept { id: *id, len: *len, el }));
-            },
-            _ => return Err(OperationError::new("Expected forall statement when applying a variable")),
+                self.stack.push(Rc::new(Concept {
+                    id: *id,
+                    len: *len,
+                    el,
+                }));
+            }
+            _ => {
+                return Err(OperationError::new(
+                    "Expected forall statement when applying a variable",
+                ))
+            }
         }
         Ok(())
     }
 
     fn concept(&mut self, n: usize) -> Result<()> {
-        self.stack.push(Rc::new(Element::Concept { id: self.concept_cnt, len: n, el: Vec::new() }));
+        self.stack.push(Rc::new(Element::Concept {
+            id: self.concept_cnt,
+            len: n,
+            el: Vec::new(),
+        }));
         self.concept_cnt += 1;
         Ok(())
     }
@@ -238,7 +265,9 @@ impl super::isa::ISA for Verifier {
             self.stack.push(el[1].clone());
             if let Some(i) = self.expression_line {
                 if i == self.stack.len() {
-                    return Err(OperationError::new("The predicate is not in expression mode but the premise is"));
+                    return Err(OperationError::new(
+                        "The predicate is not in expression mode but the premise is",
+                    ));
                 }
             }
             Ok(())
@@ -275,15 +304,21 @@ impl super::isa::ISA for Verifier {
     }
     fn export(&mut self, name: String) -> Result<()> {
         if count_symbol(self.stack.as_slice()) != 0 {
-            return Err(OperationError::new("Cannot export a statement with unbounded variables"));
+            return Err(OperationError::new(
+                "Cannot export a statement with unbounded variables",
+            ));
         }
         let el = self.pop_one()?;
-        self.symbol_table.insert(name, (matches!(self.expression_line, None), el));
+        self.symbol_table
+            .insert(name, (matches!(self.expression_line, None), el));
         self.maybe_exit_expr();
         Ok(())
     }
     fn import(&mut self, name: String) -> Result<()> {
-        let (expr, el) = self.symbol_table.get(&name).ok_or_else(|| OperationError::new(&format!("Symbol {} not found", name)))?;
+        let (expr, el) = self
+            .symbol_table
+            .get(&name)
+            .ok_or_else(|| OperationError::new(&format!("Symbol {} not found", name)))?;
         if !expr && !matches!(self.expression_line, None) {
             return Err(OperationError::new("The imported target is a hypothesis but the current context is not in expression mode"));
         }

@@ -1,13 +1,15 @@
-use std::{fmt, error::Error};
+use std::{error::Error, fmt};
 
 #[derive(Debug)]
 pub struct OperationError {
-    details: String
+    details: String,
 }
 
 impl OperationError {
     pub fn new(msg: &str) -> OperationError {
-        OperationError{details: msg.to_string()}
+        OperationError {
+            details: msg.to_string(),
+        }
     }
 }
 

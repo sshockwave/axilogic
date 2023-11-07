@@ -7,13 +7,13 @@ pub trait ISA {
 
     fn variable(&mut self) -> Result<()>;
     fn forall(&mut self) -> Result<()>; // [...,       x, F(x)] => [..., x->F(x)]
-    fn apply(&mut self) -> Result<()>;  // [..., x->F(x),    x] => [...,    F(x)]
+    fn apply(&mut self) -> Result<()>; // [..., x->F(x),    x] => [...,    F(x)]
 
     // Concepts are used to check() equality between two expressions.
     // Each invocation of concept() will push a new unique concept to the stack.
     // It has the form a -> (b -> (... -> (z -> instance)))
     fn concept(&mut self, n: usize) -> Result<()>;
-    fn mp(&mut self) -> Result<()>;  // [...,    P->Q,    P] => [...,       Q]
+    fn mp(&mut self) -> Result<()>; // [...,    P->Q,    P] => [...,       Q]
 
     // Enter expression mode.
     // In this mode, we only construct expressions

@@ -156,7 +156,12 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
             }
         }
     }
-    fn del_case6(&mut self, child_side: &Side, mut other_child: Self, mut other_child_far: Self) -> DeleteState {
+    fn del_case6(
+        &mut self,
+        child_side: &Side,
+        mut other_child: Self,
+        mut other_child_far: Self,
+    ) -> DeleteState {
         std::mem::swap(&mut self.color, &mut other_child.color);
         other_child_far.color = Color::Black;
         match child_side {
@@ -171,7 +176,12 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         }
         DeleteState::Resolved
     }
-    fn del_case5(&mut self, child_side: &Side, mut other_child: Self, mut other_child_near: Self) -> DeleteState {
+    fn del_case5(
+        &mut self,
+        child_side: &Side,
+        mut other_child: Self,
+        mut other_child_near: Self,
+    ) -> DeleteState {
         std::mem::swap(&mut other_child.color, &mut other_child_near.color);
         let other_child_far = match child_side {
             Side::Left => other_child.rotate_right_half(other_child_near),
@@ -187,7 +197,12 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         let other_child = match child_side {
             Side::Left => &mut self.right,
             Side::Right => &mut self.left,
-        }.root.as_ref().unwrap().as_ref().clone();
+        }
+        .root
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .clone();
         let (other_child_near, other_child_far) = match &child_side {
             Side::Left => (&other_child.left, &other_child.right),
             Side::Right => (&other_child.right, &other_child.left),
@@ -247,7 +262,8 @@ impl<K: Clone, I: SearchInfo<K>> From<InsertState<Node<K, I>>> for SubTree<K, I>
                 x.set_child(&side, son);
                 x
             }
-        }.into()
+        }
+        .into()
     }
 }
 
@@ -266,7 +282,11 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             None
         }
     }
-    fn set_fixup(mut node: Node<K, I>, state: InsertState<Node<K, I>>, child_side: Side) -> InsertState<Node<K, I>> {
+    fn set_fixup(
+        mut node: Node<K, I>,
+        state: InsertState<Node<K, I>>,
+        child_side: Side,
+    ) -> InsertState<Node<K, I>> {
         use InsertState::*;
         match state {
             Resolved(child) => {
@@ -306,7 +326,10 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             }
         }
     }
-    fn insert_node(&mut self, mut inserter: impl Searcher<K, I> + Into<K>) -> InsertState<Node<K, I>> {
+    fn insert_node(
+        &mut self,
+        mut inserter: impl Searcher<K, I> + Into<K>,
+    ) -> InsertState<Node<K, I>> {
         let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
             x.as_ref().clone()
         } else {
@@ -343,11 +366,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             Greater => node.right.get(key),
         }
     }
-    fn join_nodes(
-        left: Tree<K, I>,
-        mid: K,
-        right: Tree<K, I>,
-    ) -> InsertState<Node<K, I>> {
+    fn join_nodes(left: Tree<K, I>, mid: K, right: Tree<K, I>) -> InsertState<Node<K, I>> {
         use InsertState::*;
         let child_side = match left.height.cmp(&right.height) {
             Equal => match (left.tree.root_color(), right.tree.root_color()) {
@@ -442,11 +461,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
     fn join(self, mid: K, right: Self) -> Self {
         let height = std::cmp::max(self.height, right.height);
         let state = SubTree::join_nodes(self, mid, right);
-        let height = if state.higher() {
-            height + 1
-        } else {
-            height
-        };
+        let height = if state.higher() { height + 1 } else { height };
         Tree {
             tree: state.into(),
             height,
@@ -505,9 +520,7 @@ impl<K: Clone, I: SearchInfo<K>> Tree<K, I> {
         }
     }
     pub fn iter(&self) -> Iter<'_, K, I> {
-        let mut iter = Iter {
-            stack: Vec::new(),
-        };
+        let mut iter = Iter { stack: Vec::new() };
         iter.push_all_left(&self.tree);
         iter
     }
