@@ -14,6 +14,41 @@ pub enum Element {
     },
 }
 
+pub struct Concept {
+    id: usize,
+    len: usize,
+    name: String,
+}
+
+pub enum FinalElement {
+    SymbolRef(usize),
+    Universal(Rc<FinalElement>),
+    Concept{
+        def: Rc<Concept>,
+        params: Vec<Rc<FinalElement>>,
+    },
+}
+
+pub enum RefStats {
+    Bounded,
+    Unbounded{
+        range: (usize, usize), // [min, max). All variables are bounded if min == max.
+        shift: usize, // the range already considers the shift so the range can be used directly
+    },
+}
+
+type PersistentMap = u32; // TODO
+
+pub enum CacheElement {
+    Primitive(Rc<FinalElement>),
+    Bind(Rc<StackElement>, PersistentMap),
+}
+
+pub enum StackElement {
+    Symbol,
+    Value(CacheElement, RefStats),
+}
+
 pub struct Verifier {
     concept_cnt: usize,
     expression_line: Option<usize>,
@@ -125,6 +160,8 @@ impl super::isa::ISA for Verifier {
             _ => el.clone(),
         };
         self.stack.push(el);
+        // TODO: when a variable is copied from lower levels,
+        // the original SymbolRef is incorrect.
         Ok(())
     }
 
