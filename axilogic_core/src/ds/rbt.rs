@@ -419,6 +419,39 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
         };
         Self::set_fixup(node, state, child_side)
     }
+    fn pop_front(&mut self) -> Option<(DeleteState, K)> {
+        let mut node = self.root.as_ref()?.as_ref().clone();
+        match node.left.pop_front() {
+            Some((state, key)) => {
+                let state = node.del_fixup(state, &Side::Left);
+                *self = node.into();
+                Some((state, key))
+            }
+            None => match node.color {
+                // delete self
+                Color::Red => {
+                    assert!(matches!(node.left.root, None));
+                    assert!(matches!(node.right.root, None));
+                    self.root = None;
+                    Some((DeleteState::Resolved, node.key))
+                }
+                Color::Black => {
+                    *self = node.right;
+                    let key = node.key;
+                    if let Some(node) = self.root.as_ref() {
+                        let mut node = node.as_ref().clone();
+                        assert!(matches!(node.color, Color::Red));
+                        node.color = Color::Black;
+                        *self = node.into();
+                        Some((DeleteState::Resolved, key))
+                    } else {
+                        self.root = None;
+                        Some((DeleteState::DoubleBlack, key))
+                    }
+                }
+            },
+        }
+    }
     fn del(&mut self, mut key: impl Searcher<K, I>) -> DeleteState {
         use DeleteState::*;
         let mut node = if let Some(x) = self.root.as_mut() {
@@ -428,7 +461,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
         };
         let (child, child_side) = match key.cmp(&node.key, &node.info) {
             Equal => {
-                self.root = None;
+                // TODO remove from right
                 return DoubleBlack;
             }
             Less => (&mut node.left, Side::Left),
