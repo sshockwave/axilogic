@@ -130,12 +130,10 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
     }
     fn rotate_left(&mut self, right_child: Node<K, I>) {
         let mut left_child = self.rotate_left_half(right_child);
-        left_child.update();
         self.left = left_child.into();
     }
     fn rotate_right(&mut self, left_child: Node<K, I>) {
         let mut right_child = self.rotate_right_half(left_child);
-        right_child.update();
         self.right = right_child.into();
     }
     fn set_child(&mut self, child_side: &Side, child: Self) {
@@ -145,17 +143,6 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         }
     }
     // Deletion: https://medium.com/analytics-vidhya/deletion-in-red-black-rb-tree-92301e1474ea
-    fn del_case3(&mut self, child_side: &Side, mut other_child: Self) -> DeleteState {
-        other_child.color = Color::Red;
-        self.set_child(&child_side.other(), other_child);
-        match self.color {
-            Color::Black => DeleteState::DoubleBlack,
-            Color::Red => {
-                self.color = Color::Black;
-                DeleteState::Resolved
-            }
-        }
-    }
     fn del_case6(
         &mut self,
         child_side: &Side,
@@ -176,25 +163,12 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         }
         DeleteState::Resolved
     }
-    fn del_case5(
-        &mut self,
-        child_side: &Side,
-        mut other_child: Self,
-        mut other_child_near: Self,
-    ) -> DeleteState {
-        std::mem::swap(&mut other_child.color, &mut other_child_near.color);
-        let other_child_far = match child_side {
-            Side::Left => other_child.rotate_right_half(other_child_near),
-            Side::Right => other_child.rotate_left_half(other_child_near),
-        };
-        self.del_case6(child_side, other_child, other_child_far)
-    }
     fn del_black_sibling(&mut self, child_side: &Side) -> DeleteState {
         // case 3 || case 5 || case 6
         assert!(matches!(self.left.root_color(), Color::Black));
         assert!(matches!(self.right.root_color(), Color::Black));
         // Because child is double black, other_child must be of height >= 2 and at least contain a real node
-        let other_child = match child_side {
+        let mut other_child = match child_side {
             Side::Left => &mut self.right,
             Side::Right => &mut self.left,
         }
@@ -210,11 +184,26 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         if let Some(x) = other_child_far.is_red() {
             let x = x.clone();
             self.del_case6(child_side, other_child, x)
-        } else if let Some(x) = other_child_near.is_red() {
-            let x = x.clone();
-            self.del_case5(child_side, other_child, x)
+        } else if let Some(other_child_near) = other_child_near.is_red() {
+            // case 5
+            let mut other_child_near = other_child_near.clone();
+            std::mem::swap(&mut other_child.color, &mut other_child_near.color);
+            let other_child_far = match child_side {
+                Side::Left => other_child.rotate_right_half(other_child_near),
+                Side::Right => other_child.rotate_left_half(other_child_near),
+            };
+            self.del_case6(child_side, other_child, other_child_far)
         } else {
-            self.del_case3(child_side, other_child)
+            // case 3
+            other_child.color = Color::Red;
+            self.set_child(&child_side.other(), other_child);
+            match self.color {
+                Color::Black => DeleteState::DoubleBlack,
+                Color::Red => {
+                    self.color = Color::Black;
+                    DeleteState::Resolved
+                }
+            }
         }
     }
     fn del_fixup(&mut self, state: DeleteState, child_side: &Side) -> DeleteState {
@@ -487,7 +476,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                                 DoubleBlack
                             }
                         }
-                    }
+                    },
                 };
             }
             Less => (&mut node.left, Side::Left),
