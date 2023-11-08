@@ -117,24 +117,50 @@ impl Side {
     }
 }
 
-impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
-    fn rotate_left_half(&mut self, right_child: Self) -> Self {
-        let mut left_child = std::mem::replace(self, right_child);
-        std::mem::swap(&mut left_child.right, &mut self.left);
-        left_child
+impl From<bool> for Side {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Side::Right,
+            false => Side::Left,
+        }
     }
-    fn rotate_right_half(&mut self, left_child: Self) -> Self {
-        let mut right_child = std::mem::replace(self, left_child);
-        std::mem::swap(&mut self.right, &mut right_child.left);
-        right_child
+}
+
+impl From<Side> for bool {
+    fn from(value: Side) -> Self {
+        match value {
+            Side::Left => false,
+            Side::Right => true,
+        }
+    }
+}
+
+impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
+    fn child_mut<const SIDE: bool>(&mut self) -> (&mut SubTree<K, I>, &mut SubTree<K, I>) {
+        match SIDE {
+            true => (&mut self.left, &mut self.right),
+            false => (&mut self.right, &mut self.left),
+        }
+    }
+    fn rot<const SIDE: bool>(&mut self, other_child: Self) -> Self {
+        let mut new_child = std::mem::replace(self, other_child);
+        std::mem::swap(new_child.child_mut::<SIDE>().1, self.child_mut::<SIDE>().0);
+        new_child
+    }
+    fn rot_reverse<const SIDE: bool>(&mut self, other_child: Self) -> Self {
+        match SIDE {
+            true => self.rot::<false>(other_child),
+            false => self.rot::<true>(other_child),
+        }
+    }
+    fn rot_embed<const SIDE: bool>(&mut self, other_child: Self) {
+        *self.child_mut::<SIDE>().0 = self.rot::<SIDE>(other_child).into();
     }
     fn rotate_left(&mut self, right_child: Node<K, I>) {
-        let mut left_child = self.rotate_left_half(right_child);
-        self.left = left_child.into();
+        self.rot_embed::<false>(right_child)
     }
     fn rotate_right(&mut self, left_child: Node<K, I>) {
-        let mut right_child = self.rotate_right_half(left_child);
-        self.right = right_child.into();
+        self.rot_embed::<true>(left_child)
     }
     fn set_child(&mut self, child_side: &Side, child: Self) {
         match child_side {
@@ -143,60 +169,42 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
         }
     }
     // Deletion: https://medium.com/analytics-vidhya/deletion-in-red-black-rb-tree-92301e1474ea
-    fn del_case6(
+    fn del_case6<const SIDE: bool>(
         &mut self,
-        child_side: &Side,
         mut other_child: Self,
         mut other_child_far: Self,
     ) -> DeleteState {
-        std::mem::swap(&mut self.color, &mut other_child.color);
         other_child_far.color = Color::Black;
-        match child_side {
-            Side::Left => {
-                self.rotate_left(other_child);
-                self.right = other_child_far.into();
-            }
-            Side::Right => {
-                self.rotate_right(other_child);
-                self.left = other_child_far.into();
-            }
-        }
+        *other_child.child_mut::<SIDE>().1 = other_child_far.into();
+        std::mem::swap(&mut self.color, &mut other_child.color);
+        self.rot_embed::<SIDE>(other_child);
         DeleteState::Resolved
     }
-    fn del_black_sibling(&mut self, child_side: &Side) -> DeleteState {
+    fn del_black_sibling<const SIDE: bool>(&mut self) -> DeleteState {
         // case 3 || case 5 || case 6
         assert!(matches!(self.left.root_color(), Color::Black));
         assert!(matches!(self.right.root_color(), Color::Black));
         // Because child is double black, other_child must be of height >= 2 and at least contain a real node
-        let mut other_child = match child_side {
-            Side::Left => &mut self.right,
-            Side::Right => &mut self.left,
-        }
+        let mut other_child = self.child_mut::<SIDE>().1
         .root
         .as_ref()
         .unwrap()
         .as_ref()
         .clone();
-        let (other_child_near, other_child_far) = match &child_side {
-            Side::Left => (&other_child.left, &other_child.right),
-            Side::Right => (&other_child.right, &other_child.left),
-        };
+        let (other_child_near, other_child_far) = other_child.child_mut::<SIDE>();
         if let Some(x) = other_child_far.is_red() {
             let x = x.clone();
-            self.del_case6(child_side, other_child, x)
+            self.del_case6::<SIDE>(other_child, x)
         } else if let Some(other_child_near) = other_child_near.is_red() {
             // case 5
             let mut other_child_near = other_child_near.clone();
             std::mem::swap(&mut other_child.color, &mut other_child_near.color);
-            let other_child_far = match child_side {
-                Side::Left => other_child.rotate_right_half(other_child_near),
-                Side::Right => other_child.rotate_left_half(other_child_near),
-            };
-            self.del_case6(child_side, other_child, other_child_far)
+            let other_child_far = other_child.rot_reverse::<SIDE>(other_child_near);
+            self.del_case6::<SIDE>(other_child, other_child_far)
         } else {
             // case 3
             other_child.color = Color::Red;
-            self.set_child(&child_side.other(), other_child);
+            *self.child_mut::<SIDE>().1 = other_child.into();
             match self.color {
                 Color::Black => DeleteState::DoubleBlack,
                 Color::Red => {
@@ -206,37 +214,25 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
             }
         }
     }
-    fn del_fixup(&mut self, state: DeleteState, child_side: &Side) -> DeleteState {
+    fn del_fixup<const SIDE: bool>(&mut self, state: DeleteState) -> DeleteState {
         if let DeleteState::Resolved = state {
             return DeleteState::Resolved;
         }
         // child is double black
-        match &child_side {
-            Side::Left => assert!(matches!(self.left.root_color(), Color::Black)),
-            Side::Right => assert!(matches!(self.right.root_color(), Color::Black)),
-        }
-        let other_child = match child_side {
-            Side::Left => &self.right,
-            Side::Right => &self.left,
-        };
+        assert!(matches!(self.child_mut::<SIDE>().0.root_color(), Color::Black));
+        let other_child = self.child_mut::<SIDE>().1;
         if let Some(other_child) = other_child.is_red() {
             // case 4
             let mut other_child = other_child.clone();
             std::mem::swap(&mut self.color, &mut other_child.color);
-            let mut new_child = match &child_side {
-                Side::Left => self.rotate_left_half(other_child),
-                Side::Right => self.rotate_right_half(other_child),
-            };
-            let state = new_child.del_black_sibling(child_side);
-            match child_side {
-                Side::Left => self.left = new_child.into(),
-                Side::Right => self.right = new_child.into(),
-            }
+            let mut new_child = self.rot::<SIDE>(other_child);
+            let state = new_child.del_black_sibling::<SIDE>();
+            *self.child_mut::<SIDE>().0 = new_child.into();
             if let DeleteState::Resolved = state {
                 return DeleteState::Resolved;
             }
         }
-        self.del_black_sibling(child_side)
+        self.del_black_sibling::<SIDE>()
     }
 }
 
@@ -355,7 +351,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             Greater => node.right.get(key),
         }
     }
-    fn join_nodes(left: Tree<K, I>, mid: K, right: Tree<K, I>) -> InsertState<Node<K, I>> {
+    fn join_nodes(mut left: Tree<K, I>, mid: K, mut right: Tree<K, I>) -> InsertState<Node<K, I>> {
         use InsertState::*;
         let child_side = match left.height.cmp(&right.height) {
             Equal => match (left.tree.root_color(), right.tree.root_color()) {
@@ -379,40 +375,34 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             Less => Side::Left,
             Greater => Side::Right,
         };
-        let (node, node_bh) = match child_side {
-            Side::Left => (&right, right.height),
-            Side::Right => (&left, left.height),
+        let node = match child_side {
+            Side::Left => &right,
+            Side::Right => &left,
         };
+        let node_bh = node.height;
         let node = node.tree.root.as_ref().unwrap().as_ref().clone();
         let child_bh = match node.color {
             Color::Black => node_bh - 1,
             Color::Red => node_bh,
         };
-        let state = match child_side {
-            Side::Left => Self::join_nodes(
-                left,
-                mid,
-                Tree {
-                    tree: node.left.clone(),
-                    height: child_bh,
-                },
-            ),
-            Side::Right => Self::join_nodes(
-                Tree {
-                    tree: node.right.clone(),
-                    height: child_bh,
-                },
-                mid,
-                right,
-            ),
+        match child_side {
+            Side::Left => right = Tree {
+                tree: node.left.clone(),
+                height: child_bh,
+            },
+            Side::Right => left = Tree {
+                tree: node.right.clone(),
+                height: child_bh,
+            },
         };
+        let state = Self::join_nodes(left, mid, right);
         Self::set_fixup(node, state, child_side)
     }
     fn pop_front(&mut self) -> Option<(DeleteState, K)> {
         let mut node = self.root.as_ref()?.as_ref().clone();
         match node.left.pop_front() {
             Some((state, key)) => {
-                let state = node.del_fixup(state, &Side::Left);
+                let state = node.del_fixup::<false>(state);
                 *self = node.into();
                 Some((state, key))
             }
@@ -453,7 +443,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                 return match pop_state {
                     Some((state, key)) => {
                         node.key = key;
-                        let state = node.del_fixup(state, &Side::Right);
+                        let state = node.del_fixup::<true>(state);
                         *self = node.into();
                         state
                     }
@@ -469,6 +459,8 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                             if let Some(node) = self.root.as_ref() {
                                 let mut node = node.as_ref().clone();
                                 assert!(matches!(node.color, Color::Red));
+                                assert!(matches!(node.left.root, None));
+                                assert!(matches!(node.right.root, None));
                                 node.color = Color::Black;
                                 *self = node.into();
                                 Resolved
@@ -483,7 +475,10 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             Greater => (&mut node.right, Side::Right),
         };
         let state = child.del(key);
-        let state = node.del_fixup(state, &child_side);
+        let state = match &child_side {
+            Side::Left => node.del_fixup::<false>(state),
+            Side::Right => node.del_fixup::<true>(state),
+        };
         *self = node.into();
         state
     }
