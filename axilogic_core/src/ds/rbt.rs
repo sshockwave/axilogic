@@ -16,10 +16,10 @@ enum Side {
     Right,
 }
 
-enum InsertState<T> {
-    Resolved(T),
-    SingleRed(T),
-    DoubleRed(T, Side, T), // node, side of child, child
+enum InsertState<K: Clone, I: SearchInfo<K>> {
+    Resolved(SubTree<K, I>),
+    SingleRed(Node<K, I>),
+    DoubleRed(Node<K, I>, Side, Node<K, I>), // node, side of child, child
 }
 
 enum DeleteState {
@@ -99,7 +99,7 @@ impl<K: Clone, I: SearchInfo<K>> From<Node<K, I>> for SubTree<K, I> {
     }
 }
 
-impl<T> InsertState<T> {
+impl<K: Clone, I: SearchInfo<K>> InsertState<K, I> {
     fn higher(&self) -> bool {
         match self {
             Self::DoubleRed(_, _, _) => true,
@@ -236,19 +236,19 @@ impl<K: Clone, I: SearchInfo<K>> Node<K, I> {
     }
 }
 
-impl<K: Clone, I: SearchInfo<K>> From<InsertState<Node<K, I>>> for SubTree<K, I> {
-    fn from(value: InsertState<Node<K, I>>) -> Self {
+impl<K: Clone, I: SearchInfo<K>> From<InsertState<K, I>> for SubTree<K, I> {
+    fn from(value: InsertState<K, I>) -> Self {
         use InsertState::*;
         match value {
-            Resolved(x) | SingleRed(x) => x,
+            Resolved(x) => x,
+            SingleRed(x) => x.into(),
             DoubleRed(mut x, side, son) => {
                 // black height becomes greater
                 x.color = Color::Black;
                 x.set_child(&side, son);
-                x
+                x.into()
             }
         }
-        .into()
     }
 }
 
@@ -269,14 +269,17 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
     }
     fn set_fixup(
         mut node: Node<K, I>,
-        state: InsertState<Node<K, I>>,
+        state: InsertState<K, I>,
         child_side: Side,
-    ) -> InsertState<Node<K, I>> {
+    ) -> InsertState<K, I> {
         use InsertState::*;
         match state {
             Resolved(child) => {
-                node.set_child(&child_side, child);
-                Resolved(node)
+                match child_side {
+                    Side::Left => node.left = child,
+                    Side::Right => node.right = child,
+                }
+                Resolved(node.into())
             }
             SingleRed(child) => DoubleRed(node, child_side, child),
             DoubleRed(mut child, grandson_side, grandson) => {
@@ -306,7 +309,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
                         Side::Left => node.rotate_right(child),
                         Side::Right => node.rotate_left(child),
                     }
-                    Resolved(node)
+                    Resolved(node.into())
                 }
             }
         }
@@ -314,7 +317,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
     fn insert_node(
         &mut self,
         mut inserter: impl Searcher<K, I> + Into<K>,
-    ) -> InsertState<Node<K, I>> {
+    ) -> InsertState<K, I> {
         let mut node = if let Some(x) = std::mem::replace(&mut self.root, None).as_ref() {
             x.as_ref().clone()
         } else {
@@ -331,7 +334,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
         let (child, child_side) = match inserter.cmp(&node.key, &node.info) {
             Equal => {
                 node.key = inserter.into();
-                return InsertState::Resolved(node);
+                return InsertState::Resolved(node.into());
             }
             Less => (&mut node.left, Side::Left),
             Greater => (&mut node.right, Side::Right),
@@ -351,7 +354,7 @@ impl<K: Clone, I: SearchInfo<K>> SubTree<K, I> {
             Greater => node.right.get(key),
         }
     }
-    fn join_nodes(mut left: Tree<K, I>, mid: K, mut right: Tree<K, I>) -> InsertState<Node<K, I>> {
+    fn join_nodes(mut left: Tree<K, I>, mid: K, mut right: Tree<K, I>) -> InsertState<K, I> {
         use InsertState::*;
         let child_side = match left.height.cmp(&right.height) {
             Equal => match (left.tree.root_color(), right.tree.root_color()) {
