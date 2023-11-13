@@ -66,7 +66,7 @@ impl<T: Ord> Tree<T> {
         let m = vec.len() / 2;
         let key_m = Self::mid_point(key_l, key_r);
         let rc = vec[m].clone();
-        rc.as_ref().key.replace(key_m);
+        rc.key.replace(key_m);
         Tree {
             root: Some(Box::new(Node {
                 left: Self::dfs_build(&vec[..m], (key_l, key_m - 1)),
@@ -94,10 +94,13 @@ impl<T: Ord> Tree<T> {
                     (*v.info.key.borrow() + 1, r),
                 ),
             };
+            if *v.info.key.borrow() != Self::mid_point(l, r) {
+                assert!(false);
+            }
             let info = Self::insert_node(child, value, intv, !balanced);
             if !will_rebuild {
                 if !balanced {
-                    self.rebuild(intv);
+                    self.rebuild((l, r));
                 } else if !will_rebuild {
                     v.update();
                 }
@@ -117,7 +120,46 @@ impl<T: Ord> Tree<T> {
             info
         }
     }
-    pub fn insert(&mut self, value: T) -> Rc<Info<T>> {
+    pub fn add(&mut self, value: T) -> Rc<Info<T>> {
         self.insert_node(value, (0, usize::MAX), false)
+    }
+    fn calc_height(&self) -> usize {
+        if let Some(v) = self.root.as_ref() {
+            1 + std::cmp::max(v.left.calc_height(), v.right.calc_height())
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_order() {
+        let mut tree = Tree::new();
+        let mut vec = Vec::new();
+        let n = 1009;
+        for i in 0..n {
+            vec.push(tree.add((i * 7) % n));
+        }
+        vec.sort();
+        for i in 0..n {
+            assert_eq!(vec[i].value, i);
+        }
+    }
+    #[test]
+    fn test_balance() {
+        let mut tree = Tree::new();
+        let mut vec = Vec::new();
+        const N: usize = 100000;
+        for i in 0..N {
+            vec.push(tree.add(i));
+        }
+        assert!(tree.calc_height() <= 30);
+        vec.sort();
+        for i in 0..N {
+            assert_eq!(vec[i].value, i);
+        }
     }
 }
