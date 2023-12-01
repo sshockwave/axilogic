@@ -82,10 +82,10 @@ impl<T: Ord> Tree<T> {
         *self = Self::dfs_build(&vec, intv);
     }
     fn insert_node(&mut self, value: T, (l, r): (usize, usize), will_rebuild: bool) -> Rc<Info<T>> {
+        assert!(l <= r);
         if let Some(v) = self.root.as_mut() {
             use std::cmp::Ordering::*;
-            let t = value.cmp(&v.info.value);
-            let (balanced, child, intv) = match t {
+            let (balanced, child, intv) = match value.cmp(&v.info.value) {
                 Equal => return v.info.clone(),
                 Less => (v.balanced(1, 0), &mut v.left, (l, *v.info.key.borrow() - 1)),
                 Greater => (
@@ -94,9 +94,6 @@ impl<T: Ord> Tree<T> {
                     (*v.info.key.borrow() + 1, r),
                 ),
             };
-            if *v.info.key.borrow() != Self::mid_point(l, r) {
-                assert!(false);
-            }
             let info = Self::insert_node(child, value, intv, !balanced);
             if !will_rebuild {
                 if !balanced {
@@ -139,20 +136,23 @@ mod tests {
     fn test_order() {
         let mut tree = Tree::new();
         let mut vec = Vec::new();
-        let n = 1009;
-        for i in 0..n {
-            vec.push(tree.add((i * 7) % n));
+        const N: usize = 1009;
+        for i in 0..N {
+            vec.push(tree.add((i * 7) % N));
         }
         vec.sort();
-        for i in 0..n {
+        for i in 0..N {
             assert_eq!(vec[i].value, i);
+            if i + 1 < N {
+                assert!(vec[i].key < vec[i + 1].key);
+            }
         }
     }
     #[test]
     fn test_balance() {
         let mut tree = Tree::new();
         let mut vec = Vec::new();
-        const N: usize = 100000;
+        const N: usize = 1000000;
         for i in 0..N {
             vec.push(tree.add(i));
         }
@@ -160,6 +160,9 @@ mod tests {
         vec.sort();
         for i in 0..N {
             assert_eq!(vec[i].value, i);
+            if i + 1 < N {
+                assert!(vec[i].key < vec[i + 1].key);
+            }
         }
     }
 }

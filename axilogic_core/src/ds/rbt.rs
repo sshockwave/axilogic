@@ -572,3 +572,69 @@ impl<'a, K: Clone + 'a, I: SearchInfo<K>> Iterator for Iter<'a, K, I> {
         Some(&cur.key)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    type K = usize;
+    type I = IntInfo;
+    struct IntSearch {
+        key: K,
+    }
+    #[derive(Clone)]
+    struct IntInfo();
+    impl Searcher<K, I> for IntSearch {
+        fn cmp(&mut self, key: &K, _: &I) -> Ordering {
+            self.key.cmp(key)
+        }
+    }
+    impl Into<K> for IntSearch {
+        fn into(self) -> K {
+            self.key
+        }
+    }
+    impl SearchInfo<K> for IntInfo {
+        fn new(_: Option<&Self>, _: &K, _: Option<&Self>) -> Self {
+            Self()
+        }
+    }
+    fn sanity_check(x: &SubTree<K, I>, bh: usize) {
+        let x = if let Some(x) = x.root.as_ref() {
+            x.as_ref()
+        } else {
+            assert_eq!(bh, 0);
+            return;
+        };
+        let child_bh = match x.color {
+            Color::Black => {
+                assert!(bh > 0);
+                bh - 1
+            }
+            Color::Red => bh,
+        };
+        assert!(matches!(x.color, Color::Black) || matches!(x.left.root_color(), Color::Black));
+        sanity_check(&x.left, child_bh);
+        assert!(matches!(x.color, Color::Black) || matches!(x.right.root_color(), Color::Black));
+        sanity_check(&x.right, child_bh);
+    }
+    #[test]
+    fn test_ordered_insert() {
+        const N: usize = 1000;
+        let mut tree = Tree::new();
+        for i in 0..N {
+            tree.set(IntSearch { key: i });
+            sanity_check(&tree.tree, tree.height);
+        }
+        for (x, i) in tree.iter().zip(0..N) {
+            assert_eq!(*x, i);
+        }
+        tree = Tree::new();
+        for i in (0..N).rev() {
+            tree.set(IntSearch { key: i });
+            sanity_check(&tree.tree, tree.height);
+        }
+        for (x, i) in tree.iter().zip(0..N) {
+            assert_eq!(*x, i);
+        }
+    }
+}
