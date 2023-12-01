@@ -36,7 +36,7 @@ pub trait SearchInfo: Clone {
 
 pub trait Searcher {
     type Info: SearchInfo;
-    fn cmp(&mut self, key: &<Self::Info as SearchInfo>::Key, info: &Self::Info) -> Ordering;
+    fn cmp(&mut self, left: Option<&Self::Info>, key: &<Self::Info as SearchInfo>::Key, right: Option<&Self::Info>) -> Ordering;
 }
 
 pub trait Inserter: Searcher + Into<<Self::Info as SearchInfo>::Key> {}
@@ -131,6 +131,9 @@ impl<I: SearchInfo> Node<I> {
     }
     fn rot_embed<const SIDE: bool>(&mut self, other_child: Self) {
         *self.child_mut::<SIDE>().0 = self.rot::<SIDE>(other_child).into();
+    }
+    fn cmp(&self, searcher: &mut impl Searcher<Info = I>) -> Ordering {
+        searcher.cmp(self.left.root.map(|x| x.info), &self.key, self.right.root.map(|x| x.info))
     }
     fn set_fixup<const SIDE: bool>(
         mut self,
@@ -298,7 +301,7 @@ impl<I: SearchInfo> SubTree<I> {
                 right: SubTree::new(),
             });
         };
-        match inserter.cmp(&node.key, &node.info) {
+        match node.cmp(&mut inserter) {
             Equal => {
                 node.key = inserter.into();
                 InsertState::Resolved(node.into())
@@ -313,7 +316,7 @@ impl<I: SearchInfo> SubTree<I> {
         } else {
             return None;
         };
-        match key.cmp(&node.key, &node.info) {
+        match node.cmp(&mut key) {
             Equal => Some(&node.key),
             Less => node.left.get(key),
             Greater => node.right.get(key),
@@ -369,37 +372,6 @@ impl<I: SearchInfo> SubTree<I> {
             Side::Right => Self::set_fixup::<RIGHT>(node, state),
         }
     }
-    fn pop_front(&mut self) -> Option<(DeleteState, I::Key)> {
-        let mut node = rc_take(self.root.take()?);
-        Some(match node.left.pop_front() {
-            Some((state, key)) => {
-                let state = node.del_fixup::<false>(state);
-                *self = node.into();
-                (state, key)
-            }
-            None => (match node.color {
-                // delete self
-                Color::Red => {
-                    assert!(matches!(node.left.root, None));
-                    assert!(matches!(node.right.root, None));
-                    self.root = None;
-                    DeleteState::Resolved
-                }
-                Color::Black => {
-                    *self = node.right;
-                    if let Some(node) = self.root.as_ref() {
-                        let mut node = node.as_ref().clone();
-                        assert!(matches!(node.color, Color::Red));
-                        node.color = Color::Black;
-                        *self = node.into();
-                        DeleteState::Resolved
-                    } else {
-                        DeleteState::DoubleBlack
-                    }
-                }
-            }, node.key),
-        })
-    }
     fn del(&mut self, mut key: impl Searcher<Info = I>) -> DeleteState {
         use DeleteState::*;
         let mut node = if let Some(x) = self.root.as_mut() {
@@ -407,9 +379,9 @@ impl<I: SearchInfo> SubTree<I> {
         } else {
             return Resolved;
         };
-        let (child, child_side) = match key.cmp(&node.key, &node.info) {
+        let (child, child_side) = match node.cmp(&mut key) {
             Equal => {
-                let pop_state = node.right.pop_front();
+                let pop_state = node.right.del(LeftmostSearcher());
                 return match pop_state {
                     Some((state, key)) => {
                         node.key = key;
@@ -488,7 +460,7 @@ impl<I: SearchInfo> Tree<I> {
         }
     }
     pub fn cat(self, mut rhs: Self) -> Self {
-        if let Some((_, key)) = rhs.tree.pop_front() {
+        if let Some((_, key)) = rhs.tree.del(LeftmostSearcher ()) {
             self.join(key, rhs)
         } else {
             self
@@ -500,7 +472,7 @@ impl<I: SearchInfo> Tree<I> {
         } else {
             return (Tree::new(), Tree::new());
         };
-        let child_side = match key.cmp(&node.key, &node.info) {
+        let child_side = match node.cmp(&mut key) {
             Equal => unreachable!("Cannot split at existing node"),
             Less => Side::Left,
             Greater => Side::Right,
@@ -565,6 +537,19 @@ impl<'a, I: SearchInfo> Iterator for Iter<'a, I> {
         let cur = self.stack.pop()?;
         self.push_all_left(&cur.right);
         Some(&cur.key)
+    }
+}
+
+struct LeftmostSearcher<I: SearchInfo>();
+
+impl<I: SearchInfo> Searcher for LeftmostSearcher<I> {
+    type Info = I;
+    fn cmp(&mut self, left: Option<&I>, _: &I::Key, _: Option<&I>) -> Ordering {
+        if let Some(_) = left {
+            Less
+        } else {
+            Equal
+        }
     }
 }
 
