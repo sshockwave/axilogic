@@ -14,11 +14,6 @@ enum Color {
     Black,
 }
 
-enum Side {
-    Left,
-    Right,
-}
-
 enum InsertState<I: SearchInfo> {
     Resolved(SubTree<I>),
     SingleRed(Node<I>),
@@ -118,7 +113,7 @@ impl<I: SearchInfo> Node<I> {
     fn cmp(&self, searcher: &mut impl Searcher<Info = I>) -> Ordering {
         searcher.cmp(self.left.info(), &self.key, self.right.info())
     }
-    fn set_fixup<const SIDE: bool>(mut self, state: InsertState<I>) -> InsertState<I> {
+    fn add_fixup<const SIDE: bool>(mut self, state: InsertState<I>) -> InsertState<I> {
         use InsertState::*;
         match state {
             Resolved(child) => {
@@ -129,8 +124,7 @@ impl<I: SearchInfo> Node<I> {
             DoubleRed(mut child, grandson_side, grandson) => {
                 assert!(matches!(self.color, Color::Black));
                 let other_child_ref = self.child_mut::<SIDE>().1;
-                if let Some(other_child) = other_child_ref.is_red() {
-                    let mut other_child = other_child.clone();
+                if let Some(mut other_child) = other_child_ref.take_if_red() {
                     other_child.color = Color::Black;
                     child.color = Color::Black;
                     *other_child_ref = other_child.into();
@@ -155,12 +149,12 @@ impl<I: SearchInfo> Node<I> {
             }
         }
     }
-    fn insert_node<const SIDE: bool>(
+    fn add<const SIDE: bool>(
         mut self,
         key: impl Searcher<Info = I> + Into<I::Key>,
     ) -> InsertState<I> {
-        let state = self.child_mut::<SIDE>().0.insert_node(key);
-        self.set_fixup::<SIDE>(state)
+        let state = std::mem::replace(self.child_mut::<SIDE>().0, SubTree::new()).add(key);
+        self.add_fixup::<SIDE>(state)
     }
     // Deletion: https://medium.com/analytics-vidhya/deletion-in-red-black-rb-tree-92301e1474ea
     fn del_case6<const SIDE: bool>(
@@ -180,21 +174,17 @@ impl<I: SearchInfo> Node<I> {
         assert!(matches!(self.left.root_color(), Color::Black));
         assert!(matches!(self.right.root_color(), Color::Black));
         // Because child is double black, other_child must be of height >= 2 and at least contain a real node
-        let mut other_child = self
+        let mut other_child = rc_take(self
             .child_mut::<SIDE>()
             .1
             .root
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .clone();
+            .take()
+            .unwrap());
         let (other_child_near, other_child_far) = other_child.child_mut::<SIDE>();
-        if let Some(x) = other_child_far.is_red() {
-            let x = x.clone();
+        if let Some(x) = other_child_far.take_if_red() {
             self.del_case6::<SIDE>(other_child, x, key)
-        } else if let Some(other_child_near) = other_child_near.is_red() {
+        } else if let Some(mut other_child_near) = other_child_near.take_if_red() {
             // case 5
-            let mut other_child_near = other_child_near.clone();
             std::mem::swap(&mut other_child.color, &mut other_child_near.color);
             let other_child_far = match SIDE {
                 LEFT => other_child.rot::<RIGHT>(other_child_near),
@@ -217,19 +207,16 @@ impl<I: SearchInfo> Node<I> {
     fn del_fixup<const SIDE: bool>(&mut self, state: DeleteState<I::Key>) -> DeleteState<I::Key> {
         use DeleteState::*;
         let mut key = match state {
-            Resolved(k) => return Resolved(k),
-            NotFound => return NotFound,
+            state @ (Resolved(_) | NotFound) => return state,
             DoubleBlack(k) => k,
         };
-        // child is double black
         assert!(matches!(
             self.child_mut::<SIDE>().0.root_color(),
             Color::Black
         ));
         let other_child = self.child_mut::<SIDE>().1;
-        if let Some(other_child) = other_child.is_red() {
+        if let Some(mut other_child) = other_child.take_if_red() {
             // case 4
-            let mut other_child = other_child.clone();
             std::mem::swap(&mut self.color, &mut other_child.color);
             let mut new_child = self.rot::<SIDE>(other_child);
             let state = new_child.del_black_sibling::<SIDE>(key);
@@ -277,16 +264,16 @@ impl<I: SearchInfo> SubTree<I> {
     fn root_color(&self) -> &Color {
         self.root.as_ref().map_or(&Color::Black, |x| &x.color)
     }
-    fn is_red(&self) -> Option<&Node<I>> {
-        let t = self.root.as_ref()?;
-        if let Color::Red = t.color {
-            Some(t.as_ref())
+    fn take_if_red(&mut self) -> Option<Node<I>> {
+        let node = self.root.take()?;
+        if let Color::Red = node.color {
+            Some(rc_take(node))
         } else {
             None
         }
     }
-    fn insert_node(&mut self, mut key: impl Searcher<Info = I> + Into<I::Key>) -> InsertState<I> {
-        let mut node = if let Some(x) = self.root.take() {
+    fn add(self, mut key: impl Searcher<Info = I> + Into<I::Key>) -> InsertState<I> {
+        let mut node = if let Some(x) = self.root {
             rc_take(x)
         } else {
             let key = key.into();
@@ -304,8 +291,8 @@ impl<I: SearchInfo> SubTree<I> {
                 node.key = key.into();
                 InsertState::Resolved(node.into())
             }
-            Less => node.insert_node::<LEFT>(key),
-            Greater => node.insert_node::<RIGHT>(key),
+            Less => node.add::<LEFT>(key),
+            Greater => node.add::<RIGHT>(key),
         }
     }
     pub fn get(&self, mut key: impl Searcher<Info = I>) -> Option<&I::Key> {
@@ -379,8 +366,8 @@ impl<I: SearchInfo> Tree<I> {
             height: 0,
         }
     }
-    pub fn set(&mut self, key: impl Searcher<Info = I> + Into<I::Key>) {
-        let state = self.tree.insert_node(key);
+    pub fn add(&mut self, key: impl Searcher<Info = I> + Into<I::Key>) {
+        let state = std::mem::replace(&mut self.tree, SubTree::new()).add(key);
         if state.higher() {
             self.height += 1;
         }
@@ -461,8 +448,8 @@ impl<I: SearchInfo> Tree<I> {
         };
         let state = Self::join_nodes(left, mid, right);
         match SIDE {
-            LEFT => node.set_fixup::<LEFT>(state),
-            RIGHT => node.set_fixup::<RIGHT>(state),
+            LEFT => node.add_fixup::<LEFT>(state),
+            RIGHT => node.add_fixup::<RIGHT>(state),
         }
     }
     pub fn cat(self, mut rhs: Self) -> Self {
@@ -480,12 +467,12 @@ impl<I: SearchInfo> Tree<I> {
         };
         let child_side = match node.cmp(&mut key) {
             Equal => unreachable!("Cannot split at existing node"),
-            Less => Side::Left,
-            Greater => Side::Right,
+            Less => LEFT,
+            Greater => RIGHT,
         };
         let child = match child_side {
-            Side::Left => &node.left,
-            Side::Right => &node.right,
+            LEFT => &node.left,
+            RIGHT => &node.right,
         };
         let child_bh = match child.root_color() {
             Color::Black => self.height - 1,
@@ -497,7 +484,7 @@ impl<I: SearchInfo> Tree<I> {
         }
         .cut(key);
         match child_side {
-            Side::Left => (
+            LEFT => (
                 left,
                 Self::join(
                     right,
@@ -508,7 +495,7 @@ impl<I: SearchInfo> Tree<I> {
                     },
                 ),
             ),
-            Side::Right => (
+            RIGHT => (
                 Self::join(
                     Tree {
                         tree: node.left.clone(),
@@ -610,7 +597,7 @@ mod tests {
         const N: usize = 1000;
         let mut tree = Tree::new();
         for i in 0..N {
-            tree.set(IntSearch { key: i });
+            tree.add(IntSearch { key: i });
             sanity_check(&tree.tree, tree.height);
         }
         for (x, i) in tree.iter().zip(0..N) {
@@ -618,7 +605,7 @@ mod tests {
         }
         tree = Tree::new();
         for i in (0..N).rev() {
-            tree.set(IntSearch { key: i });
+            tree.add(IntSearch { key: i });
             sanity_check(&tree.tree, tree.height);
         }
         for (x, i) in tree.iter().zip(0..N) {
