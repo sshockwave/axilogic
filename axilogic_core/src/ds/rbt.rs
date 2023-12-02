@@ -15,9 +15,15 @@ enum Color {
 }
 
 enum InsertState<I: SearchInfo> {
-    Resolved(SubTree<I>),
-    SingleRed(Node<I>),
-    DoubleRed(Node<I>, bool, Node<I>), // node, side of child, child
+    Black(BlackNode<I>), // resolved
+    Red(RedNode<I>),
+    DoubleRed(
+        BlackSubTree<I>,
+        I::Key,
+        BlackSubTree<I>,
+        I::Key,
+        BlackSubTree<I>,
+    ),
 }
 
 enum DeleteState<K> {
@@ -41,287 +47,119 @@ pub trait Searcher {
     ) -> Ordering;
 }
 
-#[derive(Clone)]
-struct Node<I: SearchInfo> {
-    key: I::Key,
-    info: I,
-    color: Color,
-    left: SubTree<I>,
-    right: SubTree<I>,
+type InfoOf<T: Node> = <T::Ptr as NodePtr>::Info;
+type KeyOf<T: Node> = <InfoOf<T> as SearchInfo>::Key;
+
+trait NodeStore {
+    type Ptr: NodePtr;
+    fn new<const SIDE: bool>(child: Self::Ptr, key: KeyOf<Self>, other_child: Self::Ptr) -> Self;
+    fn unpack<const SIDE: bool>(self) -> (Self::Ptr, KeyOf<Self>, Self::Ptr);
+    fn cmp(&self, searcher: &mut impl Searcher<Info = InfoOf<Self>>) -> Ordering;
+    fn child_mut<const SIDE: bool>(&mut self) -> (&mut Self::Ptr, &mut Self::Ptr);
+    fn info(&self) -> InfoOf<Self>;
 }
 
-/// Requirements:
-/// 1. A red node does not have a red child
-/// 2. Every path from root to leaf has the same number of black nodes
-#[derive(Clone)]
-pub struct SubTree<I: SearchInfo> {
-    root: Option<Rc<Node<I>>>,
-}
-
-#[derive(Clone)]
-pub struct Tree<I: SearchInfo> {
-    tree: SubTree<I>,
-    height: usize, // the black height of the tree
-}
-
-pub struct Iter<'a, I: SearchInfo> {
-    stack: Vec<&'a Node<I>>,
-}
-
-impl<I: SearchInfo> Node<I> {
-    fn update(&mut self) {
-        self.info = I::new(self.left.info(), &self.key, self.right.info());
-    }
-}
-
-impl<I: SearchInfo> From<Node<I>> for SubTree<I> {
-    fn from(mut value: Node<I>) -> Self {
-        value.update();
-        SubTree {
-            root: Some(Rc::new(value)),
-        }
-    }
-}
-
-impl<I: SearchInfo> InsertState<I> {
-    fn higher(&self) -> bool {
-        match self {
-            Self::DoubleRed(_, _, _) => true,
-            Self::Resolved(_) | Self::SingleRed(_) => false,
-        }
-    }
-}
-
-const LEFT: bool = false;
-const RIGHT: bool = true;
-
-impl<I: SearchInfo> Node<I> {
-    fn child_mut<const SIDE: bool>(&mut self) -> (&mut SubTree<I>, &mut SubTree<I>) {
-        match SIDE {
-            LEFT => (&mut self.left, &mut self.right),
-            RIGHT => (&mut self.right, &mut self.left),
-        }
-    }
-    fn rot<const SIDE: bool>(&mut self, other_child: Self) -> Self {
-        let mut new_child = std::mem::replace(self, other_child);
-        std::mem::swap(new_child.child_mut::<SIDE>().1, self.child_mut::<SIDE>().0);
-        new_child
-    }
-    fn rot_embed<const SIDE: bool>(&mut self, other_child: Self) {
-        *self.child_mut::<SIDE>().0 = self.rot::<SIDE>(other_child).into();
-    }
-    fn cmp(&self, searcher: &mut impl Searcher<Info = I>) -> Ordering {
-        searcher.cmp(self.left.info(), &self.key, self.right.info())
-    }
-    fn add_fixup<const SIDE: bool>(mut self, state: InsertState<I>) -> InsertState<I> {
-        use InsertState::*;
-        match state {
-            Resolved(child) => {
-                *self.child_mut::<SIDE>().0 = child;
-                Resolved(self.into())
-            }
-            SingleRed(child) => DoubleRed(self, SIDE, child),
-            DoubleRed(mut child, grandson_side, grandson) => {
-                assert!(matches!(self.color, Color::Black));
-                let other_child_ref = self.child_mut::<SIDE>().1;
-                if let Some(mut other_child) = other_child_ref.take_if_red() {
-                    other_child.color = Color::Black;
-                    child.color = Color::Black;
-                    *other_child_ref = other_child.into();
-                    self.color = Color::Red;
-                    *self.child_mut::<SIDE>().0 = child.into();
-                    SingleRed(self)
-                } else {
-                    match (SIDE, grandson_side) {
-                        (LEFT, RIGHT) => child.rot_embed::<LEFT>(grandson),
-                        (RIGHT, LEFT) => child.rot_embed::<RIGHT>(grandson),
-                        (LEFT, LEFT) => child.left = grandson.into(),
-                        (RIGHT, RIGHT) => child.right = grandson.into(),
-                    }
-                    child.color = Color::Black;
-                    self.color = Color::Red;
-                    match SIDE {
-                        LEFT => self.rot_embed::<RIGHT>(child),
-                        RIGHT => self.rot_embed::<LEFT>(child),
-                    }
-                    Resolved(self.into())
-                }
-            }
-        }
-    }
-    fn add<const SIDE: bool>(
+trait Node: NodeStore
+where
+    Self: Sized + Clone,
+    SubTree<InfoOf<Self>>: From<Self>,
+{
+    const COLOR: Color;
+    fn add_fixup<const SIDE: bool>(
+        state: InsertState<InfoOf<Self>>,
+        key: KeyOf<Self>,
+        other_child: Self::Ptr,
+    ) -> InsertState<InfoOf<Self>>;
+    fn add_side<const SIDE: bool>(
         mut self,
-        key: impl Searcher<Info = I> + Into<I::Key>,
-    ) -> InsertState<I> {
-        let state = std::mem::replace(self.child_mut::<SIDE>().0, SubTree::new()).add(key);
-        self.add_fixup::<SIDE>(state)
+        key: impl Inserter<InfoOf<Self>>,
+    ) -> InsertState<InfoOf<Self>> {
+        let (child, self_key, other_child) = self.unpack::<SIDE>();
+        let state = child.add(key);
+        Self::add_fixup::<SIDE>(state, self_key, other_child)
     }
-    // Deletion: https://medium.com/analytics-vidhya/deletion-in-red-black-rb-tree-92301e1474ea
+    fn replace_key(self, key: KeyOf<Self>) -> InsertState<InfoOf<Self>>;
+    fn add(self, key: impl Inserter<InfoOf<Self>>) -> InsertState<InfoOf<Self>> {
+        match self.cmp(&mut key) {
+            Equal => self.replace_key(key.into()),
+            Less => self.add_side::<LEFT>(key),
+            Greater => self.add_side::<RIGHT>(key),
+        }
+    }
+
     fn del_case6<const SIDE: bool>(
-        &mut self,
-        mut other_child: Self,
-        mut other_child_far: Self,
-        key: I::Key,
-    ) -> DeleteState<I::Key> {
-        other_child_far.color = Color::Black;
-        *other_child.child_mut::<SIDE>().1 = other_child_far.into();
-        std::mem::swap(&mut self.color, &mut other_child.color);
-        self.rot_embed::<SIDE>(other_child);
-        DeleteState::Resolved(key)
+        a: BlackSubTree<InfoOf<Self>>,            // child
+        b: KeyOf<Self>,                           // self
+        c: SubTree<InfoOf<Self>>,                 // other_child_near
+        d: KeyOf<Self>,                           // other_child
+        e: (RedNode<InfoOf<Self>>, InfoOf<Self>), // other_child_far
+    ) -> Self {
+        let e: (BlackNode<_>, _) = (e.0.into(), e.1);
+        let abc: BlackSubTree<_> = BlackNode::new::<SIDE>(a.into(), b, c).into();
+        Self::new::<SIDE>(abc.into(), d, Some(Rc::new(e)).into())
     }
-    fn del_black_sibling<const SIDE: bool>(&mut self, key: I::Key) -> DeleteState<I::Key> {
-        // case 3 || case 5 || case 6
-        assert!(matches!(self.left.root_color(), Color::Black));
-        assert!(matches!(self.right.root_color(), Color::Black));
-        // Because child is double black, other_child must be of height >= 2 and at least contain a real node
-        let mut other_child = rc_take(self
-            .child_mut::<SIDE>()
-            .1
-            .root
-            .take()
-            .unwrap());
-        let (other_child_near, other_child_far) = other_child.child_mut::<SIDE>();
-        if let Some(x) = other_child_far.take_if_red() {
-            self.del_case6::<SIDE>(other_child, x, key)
-        } else if let Some(mut other_child_near) = other_child_near.take_if_red() {
-            // case 5
-            std::mem::swap(&mut other_child.color, &mut other_child_near.color);
-            let other_child_far = match SIDE {
-                LEFT => other_child.rot::<RIGHT>(other_child_near),
-                RIGHT => other_child.rot::<LEFT>(other_child_near),
-            };
-            self.del_case6::<SIDE>(other_child, other_child_far, key)
-        } else {
-            // case 3
-            other_child.color = Color::Red;
-            *self.child_mut::<SIDE>().1 = other_child.into();
-            match self.color {
-                Color::Black => DeleteState::DoubleBlack(key),
-                Color::Red => {
-                    self.color = Color::Black;
-                    DeleteState::Resolved(key)
-                }
-            }
-        }
-    }
-    fn del_fixup<const SIDE: bool>(&mut self, state: DeleteState<I::Key>) -> DeleteState<I::Key> {
-        use DeleteState::*;
-        let mut key = match state {
-            state @ (Resolved(_) | NotFound) => return state,
-            DoubleBlack(k) => k,
+    fn del_black_sibling<const SIDE: bool>(
+        a: BlackSubTree<InfoOf<Self>>,
+        b: KeyOf<Self>,
+        d: BlackSubTree<InfoOf<Self>>,
+    ) -> Result<SubTree<InfoOf<Self>>, BlackSubTree<InfoOf<Self>>> {
+        // Because a is double black, other_child must contain at least one real node
+        let (d, d_info) = rc_take(d.unwrap());
+        let (c, d, e) = d.unpack::<SIDE>();
+        let e = match e.take_if_red() {
+            Ok(e) => return Ok(Self::del_case6::<SIDE>(a, b, c, d, rc_take(e)).into()),
+            Err(e) => e,
         };
-        assert!(matches!(
-            self.child_mut::<SIDE>().0.root_color(),
-            Color::Black
-        ));
-        let other_child = self.child_mut::<SIDE>().1;
-        if let Some(mut other_child) = other_child.take_if_red() {
-            // case 4
-            std::mem::swap(&mut self.color, &mut other_child.color);
-            let mut new_child = self.rot::<SIDE>(other_child);
-            let state = new_child.del_black_sibling::<SIDE>(key);
-            *self.child_mut::<SIDE>().0 = new_child.into();
-            key = match state {
-                Resolved(k) => return Resolved(k),
-                DoubleBlack(k) => k,
-                NotFound => unreachable!(),
-            };
+        let c = match c.take_if_red() {
+            Ok(c) => {
+                // case 5
+                let (c_left, c, c_right) = rc_take(c).0.unpack::<SIDE>();
+                let cde = RedNode::new::<SIDE>(c_right, d, e);
+                return Ok(
+                    Self::del_case6::<SIDE>(a, b, c_left.into(), c, (cde, cde.info())).into(),
+                );
+            }
+            Err(c) => c,
+        };
+        // resolved if is red
+        let root = BlackNode::new::<SIDE>(
+            a.into(),
+            b,
+            SubTree::Red(Rc::new((RedNode::new::<SIDE>(c, d, e), d_info))),
+        );
+        match Self::COLOR {
+            Color::Red => Ok(root.into()),
+            Color::Black => Err(root.into()),
         }
-        self.del_black_sibling::<SIDE>(key)
     }
-    fn del_side<const SIDE: bool>(&mut self, key: impl Searcher<Info = I>) -> DeleteState<I::Key> {
+    fn del_fix_double_black<const SIDE: bool>(
+        a: BlackSubTree<InfoOf<Self>>,
+        b: KeyOf<Self>,
+        d: Self::Ptr,
+    ) -> Result<SubTree<InfoOf<Self>>, BlackSubTree<InfoOf<Self>>>;
+    fn del_self(self) -> DeleteState<KeyOf<Self>>;
+    fn del_side<const SIDE: bool>(
+        &mut self,
+        key: impl Searcher<Info = InfoOf<Self>>,
+    ) -> DeleteState<KeyOf<Self>> {
         let state = self.child_mut::<SIDE>().0.del(key);
         self.del_fixup::<SIDE>(state)
     }
-}
-
-impl<I: SearchInfo> From<InsertState<I>> for SubTree<I> {
-    fn from(value: InsertState<I>) -> Self {
-        use InsertState::*;
-        match value {
-            Resolved(x) => x,
-            SingleRed(x) => x.into(),
-            DoubleRed(mut x, side, son) => {
-                // black height becomes greater
-                x.color = Color::Black;
-                match side {
-                    LEFT => x.left = son.into(),
-                    RIGHT => x.right = son.into(),
-                }
-                x.into()
-            }
-        }
-    }
-}
-
-impl<I: SearchInfo> SubTree<I> {
-    pub fn new() -> Self {
-        SubTree { root: None }
-    }
-    fn info(&self) -> Option<&I> {
-        self.root.as_ref().map(|x| &x.info)
-    }
-    fn root_color(&self) -> &Color {
-        self.root.as_ref().map_or(&Color::Black, |x| &x.color)
-    }
-    fn take_if_red(&mut self) -> Option<Node<I>> {
-        let node = self.root.take()?;
-        if let Color::Red = node.color {
-            Some(rc_take(node))
-        } else {
-            None
-        }
-    }
-    fn add(self, mut key: impl Searcher<Info = I> + Into<I::Key>) -> InsertState<I> {
-        let mut node = if let Some(x) = self.root {
-            rc_take(x)
-        } else {
-            let key = key.into();
-            let info = I::new(None, &key, None);
-            return InsertState::SingleRed(Node {
-                key,
-                info,
-                color: Color::Red,
-                left: SubTree::new(),
-                right: SubTree::new(),
-            });
-        };
-        match node.cmp(&mut key) {
+    // Deletion: https://medium.com/analytics-vidhya/deletion-in-red-black-rb-tree-92301e1474ea
+    fn del(
+        rc: &mut Rc<(Self, InfoOf<Self>)>,
+        key: impl Searcher<Info = InfoOf<Self>>,
+    ) -> (bool, DeleteState<KeyOf<Self>>) {
+        let node = &rc.0;
+        (true, match node.cmp(&mut key) {
             Equal => {
-                node.key = key.into();
-                InsertState::Resolved(node.into())
-            }
-            Less => node.add::<LEFT>(key),
-            Greater => node.add::<RIGHT>(key),
-        }
-    }
-    pub fn get(&self, mut key: impl Searcher<Info = I>) -> Option<&I::Key> {
-        let node = if let Some(x) = self.root.as_ref() {
-            x.as_ref()
-        } else {
-            return None;
-        };
-        match node.cmp(&mut key) {
-            Equal => Some(&node.key),
-            Less => node.left.get(key),
-            Greater => node.right.get(key),
-        }
-    }
-    fn del(&mut self, mut key: impl Searcher<Info = I>) -> DeleteState<I::Key> {
-        use DeleteState::*;
-        let mut node = if let Some(x) = self.root.take() {
-            x
-        } else {
-            return NotFound;
-        };
-        let state = match node.cmp(&mut key) {
-            Equal => {
-                let mut right = node.right.clone();
+                let mut right = rc.0.child_mut::<LEFT>().0.clone();
                 let mut state = right.del(LeftmostSearcher(PhantomData));
-                match &mut state {
+                use DeleteState::*;
+                match state {
                     DoubleBlack(state_key) | Resolved(state_key) => {
-                        let node = Rc::make_mut(&mut node);
-                        std::mem::swap(state_key, &mut node.key);
+                        let (left, key, _) = Rc::make_mut(rc).0.unpack::<LEFT>();
+                        std::mem::swap(&mut state_key, &mut node.key);
                         node.right = right;
                         node.del_fixup::<RIGHT>(state)
                     }
@@ -353,6 +191,346 @@ impl<I: SearchInfo> SubTree<I> {
             }
             Less => Rc::make_mut(&mut node).del_side::<LEFT>(key),
             Greater => Rc::make_mut(&mut node).del_side::<RIGHT>(key),
+        })
+    }
+}
+
+trait Inserter<I: SearchInfo>: Searcher<Info = I> + Into<I::Key> {}
+impl<I: SearchInfo, T: Searcher<Info = I> + Into<I::Key>> Inserter<I> for T {}
+
+fn new_node<I: SearchInfo>(key: impl Inserter<I>) -> InsertState<I> {
+    InsertState::Red(RedNode {
+        key: key.into(),
+        left: None,
+        right: None,
+    })
+}
+
+trait NodePtr: From<BlackSubTree<Self::Info>> + Into<SubTree<Self::Info>> + Clone {
+    type Info: SearchInfo;
+    fn info(&self) -> Option<&Self::Info>;
+    fn add(self, key: impl Inserter<Self::Info>) -> InsertState<Self::Info>;
+    fn as_ref(&self) -> Option<NodeRef<'_, Self::Info>>;
+    fn get(
+        &self,
+        key: impl Searcher<Info = Self::Info>,
+    ) -> Option<&<Self::Info as SearchInfo>::Key>;
+    fn del(
+        &mut self,
+        key: impl Searcher<Info = Self::Info>,
+    ) -> DeleteState<<Self::Info as SearchInfo>::Key>;
+}
+
+#[derive(Clone)]
+struct NodeImpl<P: NodePtr> {
+    key: <P::Info as SearchInfo>::Key,
+    left: P,
+    right: P,
+}
+
+type RedNode<I: SearchInfo> = NodeImpl<BlackSubTree<I>>;
+type BlackNode<I: SearchInfo> = NodeImpl<SubTree<I>>;
+
+/// Requirements:
+/// 1. A red node does not have a red child
+/// 2. Every path from root to leaf has the same number of black nodes
+enum SubTree<I: SearchInfo> {
+    Red(Rc<(RedNode<I>, I)>),
+    Black(Rc<(BlackNode<I>, I)>),
+    None,
+}
+type BlackSubTree<I: SearchInfo> = Option<Rc<(BlackNode<I>, I)>>;
+
+impl<I: SearchInfo> Clone for SubTree<I> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Red(x) => Self::Red(x.clone()),
+            Self::Black(x) => Self::Black(x.clone()),
+            Self::None => Self::None,
+        }
+    }
+}
+impl<I: SearchInfo> SubTree<I> {
+    fn take_if_red(self) -> Result<Rc<(RedNode<I>, I)>, BlackSubTree<I>> {
+        match self {
+            Self::Red(x) => Ok(x),
+            Self::Black(x) => Err(Some(x)),
+            Self::None => Err(None),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Tree<I: SearchInfo> {
+    tree: BlackSubTree<I>,
+    height: usize, // the black height of the tree
+}
+
+pub enum NodeRef<'a, I: SearchInfo> {
+    Red(&'a RedNode<I>),
+    Black(&'a BlackNode<I>),
+}
+
+pub struct Iter<'a, I: SearchInfo> {
+    stack: Vec<NodeRef<'a, I>>,
+}
+
+impl<I: SearchInfo> InsertState<I> {
+    fn higher(&self) -> bool {
+        match self {
+            Self::DoubleRed(..) => true,
+            Self::Black(_) | Self::Red(_) => false,
+        }
+    }
+}
+
+const LEFT: bool = false;
+const RIGHT: bool = true;
+
+impl<P: NodePtr> NodeStore for NodeImpl<P> {
+    type Ptr = P;
+    fn new<const SIDE: bool>(child: P, key: KeyOf<Self>, other_child: P) -> Self {
+        match SIDE {
+            LEFT => Self {
+                key,
+                left: child,
+                right: other_child,
+            },
+            RIGHT => Self {
+                key,
+                left: other_child,
+                right: child,
+            },
+        }
+    }
+    fn info(&self) -> P::Info {
+        P::Info::new(self.left.info(), &self.key, self.right.info())
+    }
+    fn cmp(&self, searcher: &mut impl Searcher<Info = P::Info>) -> Ordering {
+        searcher.cmp(self.left.info(), &self.key, self.right.info())
+    }
+    fn unpack<const SIDE: bool>(self) -> (P, <P::Info as SearchInfo>::Key, P) {
+        match SIDE {
+            LEFT => (self.left, self.key, self.right),
+            RIGHT => (self.right, self.key, self.left),
+        }
+    }
+    fn child_mut<const SIDE: bool>(&mut self) -> (&mut P, &mut P) {
+        match SIDE {
+            LEFT => (&mut self.left, &mut self.right),
+            RIGHT => (&mut self.right, &mut self.left),
+        }
+    }
+}
+impl<P: NodePtr> NodeImpl<P> {
+    fn info(&self) -> P::Info {
+        P::Info::new(self.left.info(), &self.key, self.right.info())
+    }
+}
+
+impl<I: SearchInfo> From<BlackSubTree<I>> for SubTree<I> {
+    fn from(value: BlackSubTree<I>) -> Self {
+        match value {
+            Some(x) => Self::Black(x),
+            None => Self::None,
+        }
+    }
+}
+impl<I: SearchInfo> From<RedNode<I>> for BlackNode<I> {
+    fn from(value: RedNode<I>) -> Self {
+        BlackNode {
+            key: value.key,
+            left: value.left.into(),
+            right: value.right.into(),
+        }
+    }
+}
+impl<I: SearchInfo> From<RedNode<I>> for SubTree<I> {
+    fn from(value: RedNode<I>) -> Self {
+        SubTree::Red(Rc::new((value, value.info())))
+    }
+}
+impl<I: SearchInfo> From<BlackNode<I>> for SubTree<I> {
+    fn from(value: BlackNode<I>) -> Self {
+        SubTree::Black(Rc::new((value, value.info())))
+    }
+}
+impl<I: SearchInfo> From<BlackNode<I>> for BlackSubTree<I> {
+    fn from(value: BlackNode<I>) -> Self {
+        Some(Rc::new((value, value.info())))
+    }
+}
+
+impl<I: SearchInfo> Node for BlackNode<I> {
+    const COLOR: Color = Color::Black;
+    fn replace_key(self, key: I::Key) -> InsertState<I> {
+        InsertState::Black(Self {
+            key,
+            left: self.left,
+            right: self.right,
+        })
+    }
+    fn add_fixup<const SIDE: bool>(
+        state: InsertState<I>,
+        key: I::Key,
+        other_child: Self::Ptr,
+    ) -> InsertState<I> {
+        use InsertState::*;
+        match state {
+            Black(son) => Black(BlackNode::new::<SIDE>(son.into(), key, other_child)),
+            Red(son) => Black(BlackNode::new::<SIDE>(son.into(), key, other_child)),
+            DoubleRed(a, b, c, d, e) => {
+                let (a, b, c, d, e) = match SIDE {
+                    LEFT => (a, b, c, d, e),
+                    RIGHT => (e, d, c, b, a),
+                };
+                match other_child.take_if_red() {
+                    Ok(other_child) => {
+                        let (other_child, info) = rc_take(other_child);
+                        Red(RedNode::new::<SIDE>(
+                            BlackNode::new::<SIDE>(
+                                RedNode::new::<SIDE>(a, b, c).into(),
+                                d,
+                                e.into(),
+                            )
+                            .into(),
+                            key,
+                            Some(Rc::new((other_child.into(), info))),
+                        ))
+                    }
+                    Err(other_child) => Black(BlackNode::new::<SIDE>(
+                        RedNode::new::<SIDE>(a, b, c).into(),
+                        d,
+                        RedNode::new::<SIDE>(e, key, other_child).into(),
+                    )),
+                }
+            }
+        }
+    }
+    fn del_fix_double_black<const SIDE: bool>(
+        a: BlackSubTree<InfoOf<Self>>,
+        b: KeyOf<Self>,
+        d: Self::Ptr,
+    ) -> Result<SubTree<InfoOf<Self>>, BlackSubTree<InfoOf<Self>>> {
+        let (a, b, d) = match d.take_if_red() {
+            Ok(d) => {
+                // case 4
+                let d = rc_take(d).0;
+                let (c, d, e) = d.unpack::<SIDE>();
+                match RedNode::del_black_sibling(a, b, c) {
+                    Ok(x) => return Ok(Self::new::<SIDE>(x, d, e.into()).into()),
+                    Err(x) => (x, d, e),
+                }
+            }
+            Err(d) => (a, b, d),
+        };
+        Self::del_black_sibling::<SIDE>(a, b, d)
+    }
+}
+
+impl<I: SearchInfo> Node for RedNode<I> {
+    const COLOR: Color = Color::Red;
+    fn replace_key(self, key: I::Key) -> InsertState<I> {
+        InsertState::Red(Self {
+            key,
+            left: self.left,
+            right: self.right,
+        })
+    }
+    fn add_fixup<const SIDE: bool>(
+        state: InsertState<I>,
+        key: I::Key,
+        other_child: Self::Ptr,
+    ) -> InsertState<I> {
+        use InsertState::*;
+        match state {
+            Black(child) => Red(RedNode::new::<SIDE>(child.into(), key, other_child.into())),
+            Red(child) => match SIDE {
+                LEFT => DoubleRed(child.left, child.key, child.right, key, other_child),
+                RIGHT => DoubleRed(other_child, key, child.left, child.key, child.right),
+            },
+            DoubleRed(..) => unreachable!(),
+        }
+    }
+    fn del_fix_double_black<const SIDE: bool>(
+        a: BlackSubTree<InfoOf<Self>>,
+        b: KeyOf<Self>,
+        d: Self::Ptr,
+    ) -> Result<SubTree<InfoOf<Self>>, BlackSubTree<InfoOf<Self>>> {
+        Self::del_black_sibling::<SIDE>(a, b, d)
+    }
+}
+
+impl<I: SearchInfo> NodePtr for SubTree<I> {
+    type Info = I;
+    fn as_ref(&self) -> Option<NodeRef<'_, I>> {
+        match self {
+            Self::Red(x) => Some(NodeRef::Red(&x.0)),
+            Self::Black(x) => Some(NodeRef::Black(&x.0)),
+            Self::None => None,
+        }
+    }
+    fn info(&self) -> Option<&I> {
+        match self {
+            Self::Red(x) => Some(&x.1),
+            Self::Black(x) => Some(&x.1),
+            Self::None => None,
+        }
+    }
+    fn add(self, key: impl Inserter<Self::Info>) -> InsertState<Self::Info> {
+        match self {
+            Self::Red(x) => rc_take(x).0.add(key),
+            Self::Black(x) => rc_take(x).0.add(key),
+            Self::None => new_node(key),
+        }
+    }
+    fn get(&self, key: impl Searcher<Info = I>) -> Option<&I::Key> {
+        match self {
+            Self::Red(x) => x.0.get(key),
+            Self::Black(x) => x.0.get(key),
+            Self::None => None,
+        }
+    }
+}
+
+impl<I: SearchInfo> NodePtr for BlackSubTree<I> {
+    type Info = I;
+    fn as_ref(&self) -> Option<NodeRef<'_, Self::Info>> {
+        Some(NodeRef::Black(&self.as_ref()?.0))
+    }
+    fn info(&self) -> Option<&Self::Info> {
+        self.as_ref().map(|x| &x.1)
+    }
+    fn add(self, key: impl Inserter<Self::Info>) -> InsertState<Self::Info> {
+        match self {
+            Some(x) => rc_take(x).0.add(key),
+            None => new_node(key),
+        }
+    }
+    fn get(&self, key: impl Searcher<Info = I>) -> Option<&I::Key> {
+        self.as_ref()?.0.get(key)
+    }
+}
+
+impl<I: SearchInfo> SubTree<I> {
+    pub fn get(&self, mut key: impl Searcher<Info = I>) -> Option<&I::Key> {
+        let node = if let Some(x) = self.root.as_ref() {
+            x.as_ref()
+        } else {
+            return None;
+        };
+        match node.cmp(&mut key) {
+            Equal => Some(&node.key),
+            Less => node.left.get(key),
+            Greater => node.right.get(key),
+        }
+    }
+    fn del(&mut self, mut key: impl Searcher<Info = I>) -> DeleteState<I::Key> {
+        use DeleteState::*;
+        let mut node = if let Some(x) = self.root.take() {
+            x
+        } else {
+            return NotFound;
         };
         self.root.replace(node);
         return state;
@@ -401,11 +579,8 @@ impl<I: SearchInfo> Tree<I> {
         let child_side = match left.height.cmp(&right.height) {
             Equal => match (left.tree.root_color(), right.tree.root_color()) {
                 (Color::Black, Color::Black) => {
-                    let info = I::new(left.tree.info(), &mid, right.tree.info());
-                    return SingleRed(Node {
+                    return Red(RedNode {
                         key: mid,
-                        info,
-                        color: Color::Red,
                         left: left.tree,
                         right: right.tree,
                     });
@@ -516,9 +691,9 @@ impl<I: SearchInfo> Tree<I> {
 }
 
 impl<'a, I: SearchInfo> Iter<'a, I> {
-    fn push_all_left(&mut self, mut x: &'a SubTree<I>) {
+    fn push_all_left<P: NodePtr<Info = I>>(&mut self, mut x: &'a SubTree<I>) {
         while let Some(v) = x.root.as_ref() {
-            self.stack.push(v.as_ref());
+            self.stack.push(v.as_ref().0);
             x = &v.left;
         }
     }
