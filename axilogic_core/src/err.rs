@@ -6,9 +6,9 @@ pub struct OperationError {
 }
 
 impl OperationError {
-    pub fn new(msg: &str) -> OperationError {
+    pub fn new<T: Into<String>>(msg: T) -> OperationError {
         OperationError {
-            details: msg.to_string(),
+            details: msg.into(),
         }
     }
 }

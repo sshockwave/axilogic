@@ -1,328 +1,388 @@
+mod ty;
+
 use std::{collections::HashMap, rc::Rc};
 
 use crate::err::{OperationError, Result};
 
-#[derive(Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum Element {
+#[derive(Clone, PartialEq, Eq)]
+pub enum ElementType {
     Symbol,
-    SymbolRef(usize), // Reference to a symbol, stack top is 0
-    Universal(Rc<Element>),
-    Concept {
+    Function(Rc<ElementType>, Rc<ElementType>),
+}
+
+#[derive(PartialEq, Eq, Clone)]
+enum ElementContent {
+    Argument(usize),
+    Object {
         id: usize,
-        len: usize,
-        el: Vec<Rc<Element>>,
+        params: Vec<Element>,
+    },
+    Universal {
+        param_cnt: usize,
+        param_len: usize,
+        act: Element,
+    },
+    Implication(Element, Element),
+    Application(Element, Element),
+}
+
+#[derive(Clone, Eq)]
+struct Element {
+    content: Rc<ElementContent>,
+    ty: ElementType,
+}
+
+impl ElementContent {
+    fn calc_type(&self) -> ElementType {
+        todo!("")
+    }
+}
+
+impl Element {
+    fn dfs_patch(&mut self, id: usize, value: Element) {
+        todo!("")
+    }
+}
+
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty && self.content == other.content
+    }
+}
+
+enum StackData {
+    Hypothesis {
+        export_name: String,
+        stack: Vec<Element>,
+    },
+    Universal {
+        imag_line: Option<usize>,
+        stack: Vec<Element>,
+    },
+    Definition {
+        export_name: String,
+        imag_line: Option<usize>,
+        stack: Vec<Element>,
+    },
+    Object {
+        export_name: String,
     },
 }
 
-pub struct Concept {
-    id: usize,
-    len: usize,
-    name: String,
-}
-
-pub enum FinalElement {
-    SymbolRef(usize),
-    Universal(Rc<FinalElement>),
-    Concept {
-        def: Rc<Concept>,
-        params: Vec<Rc<FinalElement>>,
-    },
-}
-
-pub enum RefStats {
-    Bounded,
-    Unbounded {
-        range: (usize, usize), // [min, max). All variables are bounded if min == max.
-        shift: usize, // the range already considers the shift so the range can be used directly
-    },
-}
-
-type PersistentMap = u32; // TODO
-
-pub enum CacheElement {
-    Primitive(Rc<FinalElement>),
-    Bind(Rc<StackElement>, PersistentMap),
-}
-
-pub enum StackElement {
-    Symbol,
-    Value(CacheElement, RefStats),
+struct Stack {
+    arguments: Vec<ElementType>,
+    data: StackData,
 }
 
 pub struct Verifier {
-    concept_cnt: usize,
-    expression_line: Option<usize>,
-    stack: Vec<Rc<Element>>,
-    symbol_rc: Rc<Element>,
-    symbol_table: HashMap<String, (bool, Rc<Element>)>,
+    object_def: Vec<Vec<ElementType>>,
+    stack: Vec<Stack>,
+    symbol_table: HashMap<String, (bool, Element)>, // is_real, element
 }
 
-fn count_symbol<'a, T: IntoIterator<Item = &'a Rc<Element>>>(iter: T) -> usize {
-    let mut cnt = 0;
-    for el in iter {
-        if Element::Symbol == **el {
-            cnt += 1;
+impl Stack {
+    fn push(&mut self, el: Element) {
+        use StackData::*;
+        match &mut self.data {
+            Hypothesis { stack, .. } | Universal { stack, .. } | Definition { stack, .. } => {
+                stack.push(el)
+            }
+            StackData::Object { .. } => panic!("Object has no stack"),
         }
     }
-    cnt
+    fn pop(&mut self) -> Result<Element> {
+        use StackData::*;
+        match &mut self.data {
+            Hypothesis { stack, .. } | Universal { stack, .. } | Definition { stack, .. } => {
+                s_pop(stack)
+            }
+            StackData::Object { .. } => Err(OperationError::new("Object has no stack")),
+        }
+    }
+    fn is_imag(&self) -> bool {
+        use StackData::*;
+        match &self.data {
+            Hypothesis { .. }
+            | Universal {
+                imag_line: Some(_), ..
+            }
+            | Definition {
+                imag_line: Some(_), ..
+            } => true,
+            _ => false,
+        }
+    }
 }
 
-// If nothing is changed, return None.
-fn dfs_patch(f: Rc<Element>, v: Rc<Element>, level: usize) -> Rc<Element> {
-    use Element::*;
-    match f.as_ref() {
-        Symbol => panic!("Symbol in forall statement"),
-        SymbolRef(i) => {
-            if *i == level {
-                v
-            } else if *i > level {
-                Rc::new(SymbolRef(*i - 1))
-            } else {
-                f
-            }
-        }
-        Universal(body) => {
-            let new_body = dfs_patch(body.clone(), v, level + 1);
-            if Rc::ptr_eq(&f, &new_body) {
-                f
-            } else {
-                Rc::new(Universal(new_body))
-            }
-        }
-        Concept { id, len, el } => {
-            let vec: Vec<_> = el
-                .iter()
-                .map(|x| dfs_patch(x.clone(), v.clone(), level))
-                .collect();
-            if vec.iter().zip(el.iter()).all(|(x, y)| Rc::ptr_eq(x, y)) {
-                f
-            } else {
-                Rc::new(Concept {
-                    id: *id,
-                    len: *len,
-                    el: vec,
-                })
-            }
-        }
+fn s_top<T>(s: &mut Vec<T>) -> Result<&mut T> {
+    match s.last_mut() {
+        Some(x) => Ok(x),
+        None => Err(OperationError::new("Stack underflow")),
+    }
+}
+
+fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
+    match s.pop() {
+        Some(x) => Ok(x),
+        None => Err(OperationError::new("Stack underflow")),
     }
 }
 
 impl Verifier {
+    pub fn init_sys(&mut self) {
+        todo!("proposition logic")
+    }
     pub fn new() -> Self {
-        // TODO: create core::make_imply
-        Self {
-            concept_cnt: 1,
-            expression_line: None,
+        let mut vm = Self {
+            object_def: Vec::new(),
             stack: Vec::new(),
-            symbol_rc: Rc::new(Element::Symbol),
             symbol_table: HashMap::new(),
-        }
+        };
+        vm.init_sys();
+        vm
     }
-
-    fn maybe_exit_expr(&mut self) {
-        if let Some(i) = self.expression_line {
-            if i == self.stack.len() {
-                self.expression_line = None;
-            }
-        }
-    }
-
-    fn pop_one(&mut self) -> Result<Rc<Element>> {
-        match self.stack.pop() {
-            Some(el) => Ok(el),
-            None => Err(OperationError::new("Stack underflow")),
-        }
+    pub fn has(&self, s: String) -> bool {
+        self.symbol_table.contains_key(&s)
     }
 }
 
-impl super::isa::ISA for Verifier {
-    fn push(&mut self, i: isize) -> crate::err::Result<()> {
-        let i = if i < 0 {
-            let d = -i as usize;
-            if d > self.stack.len() {
-                return Err(OperationError::new("Stack underflow"));
-            }
-            self.stack.len() - d
-        } else {
-            let d = i as usize;
-            if d > self.stack.len() {
-                return Err(OperationError::new("Stack overflow"));
-            }
-            d
-        };
-        use Element::*;
-        let el = self.stack.get(i).unwrap();
-        let el = match self.stack[i].as_ref() {
-            Symbol => {
-                if let None = self.expression_line {
+impl super::isa::InstructionSet for Verifier {
+    fn app(&mut self) -> Result<()> {
+        let frame = s_top(&mut self.stack)?;
+        let x = frame.pop()?;
+        let mut f = frame.pop()?;
+        use ElementContent::*;
+        let ty = match &f.ty {
+            ElementType::Function(x_ty, ty) => {
+                if x_ty.as_ref() != &x.ty {
                     return Err(OperationError::new(
-                        "Cannot duplicate symbol outside expression mode",
+                        "Applying function with an argument of a wrong type",
                     ));
                 }
-                Rc::new(SymbolRef(count_symbol(&self.stack[(i + 1)..])))
+                ty.clone()
             }
-            SymbolRef(i2) => Rc::new(SymbolRef(i2 + count_symbol(&self.stack[(i + 1)..]))),
-            _ => el.clone(),
+            _ => return Err(OperationError::new("Applying non-function")),
         };
-        self.stack.push(el);
-        // TODO: when a variable is copied from lower levels,
-        // the original SymbolRef is incorrect.
+        let content = match f.content.as_ref() {
+            Argument(_) | Implication(_, _) | Application(_, _) => Rc::new(Application(f, x)),
+            Universal {
+                param_cnt,
+                param_len,
+                act,
+            } => {
+                let mut act = act.clone();
+                act.dfs_patch(*param_cnt, x);
+                let param_cnt = param_cnt + 1;
+                if param_cnt == *param_len {
+                    assert!(act.ty == *ty);
+                    act.content
+                } else {
+                    Rc::new(Universal {
+                        param_cnt,
+                        param_len: *param_len,
+                        act,
+                    })
+                }
+            }
+            Object { .. } => {
+                if let Object { id, params } = Rc::<ElementContent>::make_mut(&mut f.content) {
+                    assert!(params.len() < self.object_def[*id].len());
+                    params.push(x);
+                } else {
+                    unreachable!()
+                }
+                f.content
+            }
+        };
+        frame.push(Element {
+            content,
+            ty: ty.as_ref().clone(),
+        });
         Ok(())
     }
-
-    fn pop(&mut self) -> Result<()> {
-        self.pop_one();
-        self.maybe_exit_expr();
-        Ok(())
-    }
-
-    fn variable(&mut self) -> Result<()> {
-        self.stack.push(self.symbol_rc.clone());
-        Ok(())
-    }
-
-    fn forall(&mut self) -> Result<()> {
-        let pred = self.pop_one()?;
-        if let Element::Symbol = pred.as_ref() {
+    fn arg(&mut self, n: usize) -> Result<()> {
+        let frame = s_top(&mut self.stack)?;
+        if !frame.is_imag() {
             return Err(OperationError::new(
-                "Variable cannot be a predicate for the forall qualifier",
+                "Using argument of function in non-imaginary mode",
             ));
         }
-        match self.pop_one()?.as_ref() {
-            Element::Symbol => (),
-            _ => {
-                return Err(OperationError::new(
-                    "Expected symbol when binding a forall qualifier",
-                ))
-            }
-        }
-        self.stack.push(Rc::new(Element::Universal(pred)));
-        if let Some(i) = self.expression_line {
-            if i == self.stack.len() {
-                return Err(OperationError::new(
-                    "The quantifier is not in expression mode but the predicate is",
-                ));
-            }
-        }
+        frame.push(Element {
+            content: Rc::new(ElementContent::Argument(n)),
+            ty: frame
+                .arguments
+                .get(n)
+                .ok_or_else(|| OperationError::new("Argument index out of range"))?
+                .clone(),
+        });
         Ok(())
     }
 
-    fn apply(&mut self) -> Result<()> {
-        use Element::*;
-        let v = self.pop_one()?;
-        if let Symbol = v.as_ref() {
-            return Err(OperationError::new("Cannot apply an unbounded variable"));
-        }
-        self.maybe_exit_expr();
-        match self.pop_one()?.as_ref() {
-            Universal(pred) => self.stack.push(dfs_patch(pred.clone(), v, 0)),
-            Concept { id, len, el } => {
-                if *len == el.len() {
+    fn uni(&mut self) -> Result<()> {
+        self.stack.push(Stack {
+            arguments: Vec::new(),
+            data: StackData::Universal {
+                imag_line: None,
+                stack: Vec::new(),
+            },
+        });
+        Ok(())
+    }
+    fn def(&mut self, s: String) -> Result<()> {
+        self.stack.push(Stack {
+            arguments: Vec::new(),
+            data: StackData::Definition {
+                export_name: s,
+                imag_line: None,
+                stack: Vec::new(),
+            },
+        });
+        Ok(())
+    }
+    fn hyp(&mut self, s: String) -> Result<()> {
+        self.stack.push(Stack {
+            arguments: Vec::new(),
+            data: StackData::Hypothesis {
+                export_name: s,
+                stack: Vec::new(),
+            },
+        });
+        Ok(())
+    }
+    fn obj(&mut self, s: String) -> Result<()> {
+        self.stack.push(Stack {
+            arguments: Vec::new(),
+            data: StackData::Object { export_name: s },
+        });
+        Ok(())
+    }
+
+    fn hkt(&mut self) -> Result<()> {
+        unimplemented!()
+    }
+    fn im(&mut self) -> Result<()> {
+        let frame = s_top(&mut self.stack)?;
+        use StackData::*;
+        match &mut frame.data {
+            Universal { imag_line, stack }
+            | Definition {
+                imag_line, stack, ..
+            } => {
+                if let Some(_) = imag_line {
+                    return Err(OperationError::new("Imaginary mode already set"));
+                }
+                let quant = s_pop(stack)?;
+                if let ElementType::Symbol = quant.ty {
                     return Err(OperationError::new(
-                        "The concept has already been fully applied",
+                        "Entering imaginary mode requires a universal quantifier",
                     ));
                 }
-                let mut el = el.clone();
-                el.push(v);
-                self.stack.push(Rc::new(Concept {
-                    id: *id,
-                    len: *len,
-                    el,
-                }));
+                stack.push(quant);
+                imag_line.replace(stack.len());
+                Ok(())
             }
-            _ => {
-                return Err(OperationError::new(
-                    "Expected forall statement when applying a variable",
-                ))
+            _ => Err(OperationError::new(
+                "Using imaginary mode in non-universal mode",
+            )),
+        }
+    }
+    fn qed(&mut self) -> Result<()> {
+        let frame = s_pop(&mut self.stack)?;
+        use StackData::*;
+        let (body_ty, body_el) = match frame.data {
+            Object { .. } => {
+                let id = self.object_def.len();
+                self.object_def.push(frame.arguments.clone());
+                (
+                    ElementType::Symbol,
+                    ElementContent::Object {
+                        id,
+                        params: Vec::new(),
+                    },
+                )
+            }
+            Universal { mut stack, .. }
+            | Definition { mut stack, .. }
+            | Hypothesis { mut stack, .. } => {
+                if stack.len() != 1 {
+                    return Err(OperationError::new("QED with non-singleton stack"));
+                }
+                let el = stack.pop().unwrap();
+                (el.ty, el.content.as_ref().clone())
+            }
+        };
+        let el = Element {
+            content: Rc::new(body_el)/* Rc::new(ElementContent::Universal {
+                param_cnt: 0,
+                param_len: 0,
+                act: Rc::new(body_el),
+            })*/,
+            ty: ElementType::Function(Rc::new(ElementType::Symbol), Rc::new(body_ty)),
+        }; // TODO
+        match frame.data {
+            Definition { export_name, .. } => {
+                self.symbol_table.insert(export_name, (true, el));
+            }
+            Object { export_name } | Hypothesis { export_name, .. } => {
+                self.symbol_table.insert(export_name, (false, el));
+            }
+            Universal { .. } => {
+                let frame = s_top(&mut self.stack)?;
+                frame.push(el);
             }
         }
         Ok(())
     }
-
-    fn concept(&mut self, n: usize) -> Result<()> {
-        self.stack.push(Rc::new(Element::Concept {
-            id: self.concept_cnt,
-            len: n,
-            el: Vec::new(),
-        }));
-        self.concept_cnt += 1;
+    fn req(&mut self, s: String) -> Result<()> {
+        let (is_real, el) = self
+            .symbol_table
+            .get(&s)
+            .ok_or_else(|| OperationError::new(format!("Symbol not found: {}", s)))?;
+        let frame = s_top(&mut self.stack)?;
+        if !is_real && frame.is_imag() {
+            return Err(OperationError::new(format!(
+                "Using imaginary symbol {} in imaginary mode",
+                s
+            )));
+        }
+        frame.push(el.clone());
         Ok(())
     }
     fn mp(&mut self) -> Result<()> {
-        let p = self.pop_one()?;
-        let pq = self.pop_one()?;
-        if let Element::Concept { id, len, el } = pq.as_ref() {
-            if *id != 0 {
-                return Err(OperationError::new("Expected imply statement"));
-            }
-            assert_eq!(*len, 2);
-            if el.len() != 2 {
-                return Err(OperationError::new("Imply statement incomplete"));
-            }
-            if el[0] != p {
-                return Err(OperationError::new("Condition mismatch"));
-            }
-            self.stack.push(el[1].clone());
-            if let Some(i) = self.expression_line {
-                if i == self.stack.len() {
-                    return Err(OperationError::new(
-                        "The predicate is not in expression mode but the premise is",
-                    ));
-                }
-            }
-            Ok(())
-        } else {
-            Err(OperationError::new("Expected imply statement"))
-        }
-    }
-    fn express(&mut self) -> Result<()> {
-        if let Some(_) = self.expression_line {
-            return Err(OperationError::new("Already in expression mode"));
-        }
-        self.expression_line = Some(self.stack.len());
-        Ok(())
-    }
-    fn assert(&mut self) -> Result<()> {
-        let pq = self.pop_one()?;
-        self.maybe_exit_expr();
-        if let None = self.expression_line {
-            return Err(OperationError::new("Not in expression mode"));
-        }
-        if let Element::Concept { id, len, el } = pq.as_ref() {
-            if *id != 0 {
-                return Err(OperationError::new("Expected imply statement"));
-            }
-            assert_eq!(*len, 2);
-            if el.len() != 2 {
-                return Err(OperationError::new("Imply statement incomplete"));
-            }
-            self.stack.push(el[1].clone());
-            Ok(())
-        } else {
-            Err(OperationError::new("Expected imply statement"))
-        }
-    }
-    fn export(&mut self, name: String) -> Result<()> {
-        if count_symbol(self.stack.as_slice()) != 0 {
+        let frame = s_top(&mut self.stack)?;
+        if frame.is_imag() {
             return Err(OperationError::new(
-                "Cannot export a statement with unbounded variables",
+                "Use sat instead of mp in imaginary mode",
             ));
         }
-        let el = self.pop_one()?;
-        self.symbol_table
-            .insert(name, (matches!(self.expression_line, None), el));
-        self.maybe_exit_expr();
-        Ok(())
-    }
-    fn import(&mut self, name: String) -> Result<()> {
-        let (expr, el) = self
-            .symbol_table
-            .get(&name)
-            .ok_or_else(|| OperationError::new(&format!("Symbol {} not found", name)))?;
-        if !expr && !matches!(self.expression_line, None) {
-            return Err(OperationError::new("The imported target is a hypothesis but the current context is not in expression mode"));
+        let p_pred = frame.pop()?;
+        let pq = frame.pop()?;
+        if let ElementContent::Implication(p_ans, q) = pq.content.as_ref() {
+            if p_pred != *p_ans {
+                return Err(OperationError::new("MP but condition not satisfied"));
+            }
+            frame.push(q.clone());
+            Ok(())
+        } else {
+            Err(OperationError::new("Using mp with non-implication"))
         }
-        self.stack.push(el.clone());
+    }
+    fn sat(&mut self) -> Result<()> {
+        let frame = s_top(&mut self.stack)?;
+        if !frame.is_imag() {
+            return Err(OperationError::new("Using sat in non-imaginary mode"));
+        }
+        let pq = frame.pop()?;
+        if let ElementContent::Implication(_, q) = pq.content.as_ref() {
+            frame.push(q.clone());
+            Ok(())
+        } else {
+            Err(OperationError::new("Using sat with non-implication"))
+        }
+    }
+    fn var(&mut self) -> Result<()> {
+        let frame = s_top(&mut self.stack)?;
+        frame.arguments.push(ElementType::Symbol);
         Ok(())
     }
 }
