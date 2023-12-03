@@ -319,19 +319,7 @@ impl super::isa::InstructionSet for Verifier {
             })*/,
             ty: ElementType::Function(Rc::new(ElementType::Symbol), Rc::new(body_ty)),
         }; // TODO
-        match frame.data {
-            Definition { export_name, .. } => {
-                self.symbol_table.insert(export_name, (true, el));
-            }
-            Object { export_name } | Hypothesis { export_name, .. } => {
-                self.symbol_table.insert(export_name, (false, el));
-            }
-            Universal { .. } => {
-                let frame = s_top(&mut self.stack)?;
-                frame.push(el);
-            }
-        }
-        Ok(())
+        todo!()
     }
     fn req(&mut self, s: String) -> Result<()> {
         let (is_real, el) = self
