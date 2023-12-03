@@ -112,7 +112,7 @@ enum StackElement<G: IdGenerator> {
 
 pub struct Verifier<G: IdGenerator = CountGenerator> {
     obj_id: G,
-    is_syn: bool,
+    syn_cnt: usize,
     arg_stack: Vec<ty::Type>,
     stack: Vec<StackElement<G>>,
     ty_reg: ty::Registry,
@@ -135,13 +135,40 @@ fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
 }
 
 impl<G: IdGenerator> Verifier<G> {
-    pub fn init_l1(&mut self) -> Result<()> {
+    fn init_l1(&mut self) -> Result<()> {
+        self.syn()?;
+        self.uni()?;
+        self.var()?;
+        self.var()?;
+        self.qed()?;
+        {
+            self.req("sys::imply".into())?;
+            self.syn()?;
+            self.arg(2.try_into().unwrap())?;
+            self.app()?;
+            self.syn()?;
+            {
+                self.req("sys::imply".into())?;
+                self.syn()?;
+                self.arg(1.try_into().unwrap())?;
+                self.app();
+                self.syn()?;
+                self.arg(2.try_into().unwrap())?;
+                self.app();
+            }
+            self.app()?;
+        }
+        self.qed()?;
+        self.qed()?;
+        let name = "sys::l1";
+        self.hyp(name.into())?;
+        self.sym_table.get_mut(name).unwrap().0 = true;
+        Ok(())
+    }
+    fn init_l2(&mut self) -> Result<()> {
         todo!()
     }
-    pub fn init_l2(&mut self) -> Result<()> {
-        todo!()
-    }
-    pub fn init_l3(&mut self) -> Result<()> {
+    fn init_l3(&mut self) -> Result<()> {
         todo!()
     }
     pub fn init_sys(&mut self) -> Result<()> {
@@ -160,7 +187,7 @@ impl<G: IdGenerator> Verifier<G> {
             ty_reg: ty::Registry::new(),
             stack: Vec::new(),
             arg_stack: Vec::new(),
-            is_syn: false,
+            syn_cnt: 0,
             imply_id,
             sym_table: HashMap::new(),
         };
@@ -240,10 +267,7 @@ impl<G: IdGenerator> Verifier<G> {
 
 impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     fn syn(&mut self) -> Result<()> {
-        if self.is_syn {
-            return Err(OperationError::new("Already in synthetic mode"));
-        }
-        self.is_syn = true;
+        self.syn_cnt += 1;
         self.stack.push(StackElement::Synthetic);
         Ok(())
     }
@@ -285,7 +309,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn arg(&mut self, n: NonZeroUsize) -> Result<()> {
-        if !self.is_syn {
+        if self.syn_cnt == 0 {
             return Err(OperationError::new(
                 "Using argument of function in non-synthetic mode",
             ));
@@ -309,7 +333,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn def(&mut self, s: String) -> Result<()> {
-        if self.is_syn {
+        if self.syn_cnt > 0 {
             return Err(OperationError::new(
                 "Exporting an element in synthetic mode but calling `def`",
             ));
@@ -333,7 +357,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
             return Err(OperationError::new("Exporting an invalid element"));
         };
         if let StackElement::Synthetic = self.pop()? {
-            self.is_syn = false;
+            self.syn_cnt -= 1;
         } else {
             return Err(OperationError::new(
                 "Exporting an element in non-synthetic mode",
@@ -393,7 +417,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
             .sym_table
             .get(&s)
             .ok_or_else(|| OperationError::new(format!("Symbol not found: {}", s)))?;
-        if !is_real && !self.is_syn {
+        if !is_real && self.syn_cnt == 0 {
             return Err(OperationError::new(format!(
                 "Using imaginary symbol {} in imaginary mode",
                 s
@@ -404,7 +428,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn mp(&mut self) -> Result<()> {
-        if self.is_syn {
+        if self.syn_cnt > 0 {
             return Err(OperationError::new(
                 "Use sat instead of mp in synthetic mode",
             ));
@@ -423,7 +447,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn sat(&mut self) -> Result<()> {
-        if !self.is_syn {
+        if self.syn_cnt == 0 {
             return Err(OperationError::new("Using sat in non-synthetic mode"));
         }
         let (_, q) = self.pop_imply()?;
