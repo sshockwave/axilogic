@@ -1,6 +1,13 @@
 mod ty;
 
-use std::{cell::RefCell, cmp::max, collections::HashMap, num::NonZeroUsize, rc::Rc};
+use std::{
+    cell::{Ref, RefCell},
+    cmp::max,
+    collections::HashMap,
+    num::NonZeroUsize,
+    ops::Deref,
+    rc::Rc,
+};
 
 use crate::{
     err::{OperationError, Result},
@@ -42,11 +49,64 @@ impl<G: IdGenerator> CacheElement<G> {
             CacheEnum::RefShift(el, _) => el.ty(reg),
         }
     }
-    fn unwrap_one(&self) -> &Element<G, Rc<Self>> {
-        todo!()
+    fn unwrap_one(&self) -> Ref<'_, Element<G, Rc<Self>>> {
+        use CacheEnum::*;
+        Ref::map(self.data.borrow(), |x| match x {
+            Primitive(el) => el,
+            Bind { body, .. } => todo!(),
+            RefShift(el, _) => todo!(),
+        })
     }
     fn check_equal(a: &Rc<Self>, b: &Rc<Self>) -> bool {
-        todo!()
+        if Rc::ptr_eq(a, b) {
+            return true;
+        }
+        use Element::*;
+        match (a.unwrap_one().deref(), b.unwrap_one().deref()) {
+            (Argument { pos: pos1, .. }, Argument { pos: pos2, .. }) => pos1 == pos2,
+            (
+                Object {
+                    id: id1,
+                    params: params1,
+                },
+                Object {
+                    id: id2,
+                    params: params2,
+                },
+            ) => {
+                if id1 != id2 {
+                    return false;
+                }
+                assert!(params1.len() == params2.len());
+                params1
+                    .iter()
+                    .zip(params2.iter())
+                    .all(|(x, y)| Self::check_equal(x, y))
+            }
+            (
+                Universal {
+                    ty: ty1,
+                    body: body1,
+                },
+                Universal {
+                    ty: ty2,
+                    body: body2,
+                },
+            ) => Self::check_equal(body1, body2),
+            (
+                Application {
+                    arg: arg1,
+                    body: body1,
+                    ..
+                },
+                Application {
+                    arg: arg2,
+                    body: body2,
+                    ..
+                },
+            ) => Self::check_equal(arg1, arg2) && Self::check_equal(body1, body2),
+            _ => false,
+        }
     }
 }
 impl<G: IdGenerator> From<Element<G, Rc<Self>>> for CacheElement<G> {
@@ -97,10 +157,22 @@ fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
 }
 
 impl<G: IdGenerator> Verifier<G> {
+    pub fn init_l1(&mut self) -> Result<()> {
+        todo!()
+    }
+    pub fn init_l2(&mut self) -> Result<()> {
+        todo!()
+    }
+    pub fn init_l3(&mut self) -> Result<()> {
+        todo!()
+    }
     pub fn init_sys(&mut self) -> Result<()> {
         self.obj(1, "sys::not".into())?;
         self.add_obj(1, "sys::imply".into(), self.imply_id.clone())?;
-        todo!("proposition logic")
+        self.init_l1()?;
+        self.init_l2()?;
+        self.init_l3()?;
+        Ok(())
     }
 
     pub fn new(mut obj_id: G) -> Self {
@@ -175,7 +247,8 @@ impl<G: IdGenerator> Verifier<G> {
         } else {
             return Err(OperationError::new("Imply statement not found"));
         };
-        if let Element::Object { id, params } = pq.unwrap_one() {
+        let pq = pq.unwrap_one();
+        if let Element::Object { id, params } = pq.deref() {
             if id != &self.imply_id {
                 return Err(OperationError::new("Object is not imply"));
             }
@@ -211,7 +284,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         } else {
             return Err(OperationError::new("Using app on an invalid element"));
         };
-        let el = StackElement::Element(Rc::new(match f.unwrap_one() {
+        let f_el = f.unwrap_one();
+        let f_ref = f_el.deref();
+        let el = StackElement::Element(Rc::new(match f_ref {
             Element::Universal { body, ty: f_ty } => {
                 let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
                 let max_ref = max(x.max_ref, f.max_ref);
@@ -226,8 +301,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
             }
             Element::Application { ty: f_ty, .. } | Element::Argument { ty: f_ty, .. } => {
                 let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+                std::mem::drop(f_el);
                 Element::Application {
-                    ty: ty,
+                    ty,
                     arg: x,
                     body: f,
                 }
