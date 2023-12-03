@@ -4,6 +4,7 @@ use std::{cell::RefCell, cmp::max, collections::HashMap, num::NonZeroUsize, rc::
 
 use crate::{
     err::{OperationError, Result},
+    isa::InstructionSet,
     util::{CountGenerator, IdGenerator},
 };
 
@@ -11,7 +12,6 @@ enum Element<G: IdGenerator, P> {
     Argument { pos: NonZeroUsize, ty: ty::Type },
     Object { id: G::Id, params: Vec<P> },
     Universal { ty: ty::Type, body: P },
-    Implication(P, P),
     Application { ty: ty::Type, arg: P, body: P },
 }
 impl<G: IdGenerator, P> Element<G, P> {
@@ -20,7 +20,6 @@ impl<G: IdGenerator, P> Element<G, P> {
             Element::Argument { ty, .. } => ty.clone(),
             Element::Object { .. } => reg.symbol(),
             Element::Universal { ty, .. } => ty.clone(),
-            Element::Implication(..) => reg.symbol(),
             Element::Application { ty, .. } => ty.clone(),
         }
     }
@@ -57,7 +56,6 @@ impl<G: IdGenerator> From<Element<G, Rc<Self>>> for CacheElement<G> {
             Argument { pos, .. } => pos.get(),
             Object { params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
             Universal { body, .. } => max(body.max_ref, 1) - 1,
-            Implication(p, q) => max(p.max_ref, q.max_ref),
             Application { arg, body, .. } => max(arg.max_ref, max(body.max_ref, 1) - 1),
         };
         CacheElement {
@@ -80,6 +78,7 @@ pub struct Verifier<G: IdGenerator = CountGenerator> {
     arg_stack: Vec<ty::Type>,
     stack: Vec<StackElement<G>>,
     ty_reg: ty::Registry,
+    imply_id: G::Id,
     sym_table: HashMap<String, (bool, Rc<CacheElement<G>>)>, // is_real, element
 }
 
@@ -98,29 +97,96 @@ fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
 }
 
 impl<G: IdGenerator> Verifier<G> {
-    pub fn init_sys(&mut self) {
+    pub fn init_sys(&mut self) -> Result<()> {
+        self.obj(1, "sys::not".into())?;
+        self.add_obj(1, "sys::imply".into(), self.imply_id.clone())?;
         todo!("proposition logic")
     }
-    pub fn new(obj_id: G) -> Self {
+
+    pub fn new(mut obj_id: G) -> Self {
+        let imply_id = obj_id.new();
         let mut vm = Self {
             obj_id,
             ty_reg: ty::Registry::new(),
             stack: Vec::new(),
             arg_stack: Vec::new(),
             is_syn: false,
+            imply_id,
             sym_table: HashMap::new(),
         };
-        vm.init_sys();
+        vm.init_sys().unwrap();
         vm
     }
+
     pub fn has(&self, s: String) -> bool {
         self.sym_table.contains_key(&s)
     }
+
     fn push(&mut self, el: StackElement<G>) {
         self.stack.push(el)
     }
+
     fn pop(&mut self) -> Result<StackElement<G>> {
         s_pop(&mut self.stack)
+    }
+
+    fn add_sym(&mut self, s: String, is_real: bool, el: Rc<CacheElement<G>>) -> Result<()> {
+        if let Some(_) = self.sym_table.insert(s, (is_real, el)) {
+            return Err(OperationError::new("Symbol already exists"));
+        }
+        Ok(())
+    }
+
+    fn add_obj(&mut self, n: usize, s: String, id: G::Id) -> Result<()> {
+        let mut el = Rc::new(
+            Element::Object {
+                id: id,
+                params: (1..=n)
+                    .rev()
+                    .map(|x| {
+                        Rc::new(
+                            Element::Argument {
+                                pos: x.try_into().unwrap(),
+                                ty: self.ty_reg.symbol(),
+                            }
+                            .into(),
+                        )
+                    })
+                    .collect(),
+            }
+            .into(),
+        );
+        for _ in 0..n {
+            el = Rc::new(
+                Element::Universal {
+                    ty: self.ty_reg.symbol(),
+                    body: el,
+                }
+                .into(),
+            );
+        }
+        self.add_sym(s, false, el);
+        Ok(())
+    }
+
+    fn pop_imply(&mut self) -> Result<(Rc<CacheElement<G>>, Rc<CacheElement<G>>)> {
+        let pq = if let StackElement::Element(pq) = self.pop()? {
+            pq
+        } else {
+            return Err(OperationError::new("Imply statement not found"));
+        };
+        if let Element::Object { id, params } = pq.unwrap_one() {
+            if id != &self.imply_id {
+                return Err(OperationError::new("Object is not imply"));
+            }
+            assert!(params.len() == 2);
+            Ok(match &params[..] {
+                [a, b] => (a.clone(), b.clone()),
+                _ => unreachable!(),
+            })
+        } else {
+            Err(OperationError::new("Not imply object"))
+        }
     }
 }
 
@@ -148,13 +214,14 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let el = StackElement::Element(Rc::new(match f.unwrap_one() {
             Element::Universal { body, ty: f_ty } => {
                 let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+                let max_ref = max(x.max_ref, f.max_ref);
                 CacheElement {
                     data: RefCell::new(CacheEnum::Bind {
                         body: body.clone(),
                         arg: x,
                         ty,
                     }),
-                    max_ref: f.max_ref,
+                    max_ref,
                 }
             }
             Element::Application { ty: f_ty, .. } | Element::Argument { ty: f_ty, .. } => {
@@ -184,13 +251,13 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
                 n.get()
             )));
         }
-        self.push(StackElement::Element(Rc::new(CacheElement {
-            data: RefCell::new(CacheEnum::Primitive(Element::Argument {
+        self.push(StackElement::Element(Rc::new(
+            Element::Argument {
                 pos: n,
                 ty: self.arg_stack[self.arg_stack.len() - n.get()].clone(),
-            })),
-            max_ref: n.get(),
-        })));
+            }
+            .into(),
+        )));
         Ok(())
     }
 
@@ -213,7 +280,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         if el.max_ref != 0 {
             return Err(OperationError::new("Exporting an unbounded element"));
         }
-        self.sym_table.insert(s, (true, el));
+        self.add_sym(s, true, el)?;
         Ok(())
     }
 
@@ -233,39 +300,13 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         if el.max_ref != 0 {
             return Err(OperationError::new("Exporting an unbounded element"));
         }
-        self.sym_table.insert(s, (false, el));
+        self.add_sym(s, false, el);
         Ok(())
     }
 
     fn obj(&mut self, n: usize, s: String) -> Result<()> {
-        let mut el = Rc::new(
-            Element::Object {
-                id: self.obj_id.new(),
-                params: (1..=n)
-                    .map(|x| {
-                        Rc::new(
-                            Element::Argument {
-                                pos: x.try_into().unwrap(),
-                                ty: self.ty_reg.symbol(),
-                            }
-                            .into(),
-                        )
-                    })
-                    .collect(),
-            }
-            .into(),
-        );
-        for _ in 0..n {
-            el = Rc::new(
-                Element::Universal {
-                    ty: self.ty_reg.symbol(),
-                    body: el,
-                }
-                .into(),
-            );
-        }
-        self.sym_table.insert(s, (false, el));
-        Ok(())
+        let id = self.obj_id.new();
+        self.add_obj(n, s, id)
     }
 
     fn hkt(&mut self) -> Result<()> {
@@ -280,6 +321,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         vec.push(self.ty_reg.infer(p, q));
         Ok(())
     }
+
     fn qed(&mut self) -> Result<()> {
         match self.pop()? {
             StackElement::Argument | StackElement::Synthetic => {
@@ -333,22 +375,11 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         } else {
             return Err(OperationError::new("Using mp on an invalid element"));
         };
-        let pq = if let StackElement::Element(pq) = self.pop()? {
-            pq
-        } else {
-            return Err(OperationError::new("Using mp on an invalid element"));
-        };
-        let (p_ans, q) = if let Element::Implication(p_ans, q) = pq.unwrap_one() {
-            (p_ans, q)
-        } else {
-            return Err(OperationError::new(
-                "Using mp on an non-implication element",
-            ));
-        };
-        if !CacheElement::check_equal(p_ans, &p) {
+        let (p_ans, q) = self.pop_imply()?;
+        if !CacheElement::check_equal(&p_ans, &p) {
             return Err(OperationError::new("Using mp but condition not met"));
         }
-        self.push(StackElement::Element(q.clone()));
+        self.push(StackElement::Element(q));
         Ok(())
     }
 
@@ -356,20 +387,8 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         if !self.is_syn {
             return Err(OperationError::new("Using sat in non-synthetic mode"));
         }
-        let el = self.pop();
-        let el = if let StackElement::Element(el) = el? {
-            el
-        } else {
-            return Err(OperationError::new("Using sat on an invalid element"));
-        };
-        let q = if let Element::Implication(_, q) = el.unwrap_one() {
-            q
-        } else {
-            return Err(OperationError::new(
-                "Using sat on an non-implication element",
-            ));
-        };
-        self.push(StackElement::Element(q.clone()));
+        let (_, q) = self.pop_imply()?;
+        self.push(StackElement::Element(q));
         Ok(())
     }
 
