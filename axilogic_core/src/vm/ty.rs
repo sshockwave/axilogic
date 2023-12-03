@@ -1,89 +1,213 @@
-use crate::{err::OperationError, util::IdGenerator};
+use crate::{
+    ds::pds::{set_diff_mut, set_union, set_union_own},
+    err::OperationError,
+    util::IdGenerator,
+};
 use rpds::{HashTrieMap, HashTrieSet};
-use std::{hash::Hash, rc::Rc};
+use std::rc::Rc;
+
+pub struct Symbol<G: IdGenerator> {
+    id: G::Id,
+    provides: HashTrieSet<G::Id>,
+    ref_ptr: Type<G>,
+}
+
+impl<G: IdGenerator> Symbol<G> {
+    pub fn new(g: &mut G) -> Self {
+        let id = g.new();
+        let mut provides = HashTrieSet::new();
+        provides.insert_mut(id.clone());
+        let mut self_ptr = Type(Rc::new(TypeEnum::Reference {
+            id: id.clone(),
+            requires: provides.clone(),
+        }));
+        Self {
+            id,
+            provides,
+            ref_ptr: self_ptr,
+        }
+    }
+    pub fn get_ref(&self) -> Type<G> {
+        self.ref_ptr.clone()
+    }
+}
+
+struct Reference<G: IdGenerator>(Type<G>);
+
+impl<G: IdGenerator> Clone for Reference<G> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 enum TypeEnum<G: IdGenerator> {
     Symbol {
         id: G::Id,
-        ref_self: Type<G>,
+        provides: HashTrieSet<G::Id>,
+        ref_ptr: Type<G>,
     },
     Reference {
         id: G::Id,
+        requires: HashTrieSet<G::Id>,
     },
     Quantification {
         has_symbol: bool,
         quantifier: Type<G>,
         predicate: Type<G>,
+        provides: HashTrieSet<G::Id>,
+        requires: HashTrieSet<G::Id>,
     },
 }
 
-struct TypeData<G: IdGenerator> {
-    data: TypeEnum<G>,
-    provides: HashTrieSet<G::Id>,
-    requires: HashTrieSet<G::Id>,
-}
-
-pub struct Type<G: IdGenerator>(Rc<TypeData<G>>);
-
-fn set_union<T: Clone + Hash + Eq>(a: &mut HashTrieSet<T>, b: &mut HashTrieSet<T>) {
-    if a.size() < b.size() {
-        std::mem::swap(a, b);
-    }
-    let mut a = a.clone();
-    for x in b.iter() {
-        a.insert_mut(x.clone());
+impl<G: IdGenerator> From<Symbol<G>> for Type<G> {
+    fn from(s: Symbol<G>) -> Self {
+        Self(Rc::new(TypeEnum::Symbol {
+            id: s.id,
+            provides: s.provides,
+            ref_ptr: s.ref_ptr,
+        }))
     }
 }
+impl<G: IdGenerator> From<Reference<G>> for Type<G> {
+    fn from(r: Reference<G>) -> Self {
+        r.0
+    }
+}
+
+pub struct Type<G: IdGenerator>(Rc<TypeEnum<G>>);
 
 impl<G: IdGenerator> Type<G> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-    fn make_ref_self(id: G::Id) -> Self {
-        let mut set = HashTrieSet::new();
-        set.insert_mut(id.clone());
-        Self(Rc::new(TypeData {
-            data: TypeEnum::Reference { id },
-            provides: HashTrieSet::new(),
-            requires: set,
-        }))
-    }
-    pub fn new_symbol(g: &mut G) -> Self {
-        let id = g.new();
-        let ref_self = Self::make_ref_self(id.clone());
-        let set = ref_self.0.requires.clone();
-        Self(Rc::new(TypeData {
-            data: TypeEnum::Symbol { id, ref_self },
-            provides: set,
-            requires: HashTrieSet::new(),
-        }))
-    }
-    fn has_symbol(&self) -> bool {
-        match &self.0.data {
-            TypeEnum::Symbol { .. } => true,
-            TypeEnum::Reference { .. } => false,
-            TypeEnum::Quantification { has_symbol, .. } => *has_symbol,
-        }
-    }
     pub fn new_quant(p: Self, q: Self) -> Self {
-        let mut provides = p.0.provides.clone();
-        set_union(&mut provides, &mut q.0.provides.clone());
-        let mut requires = p.0.requires.clone();
-        for x in q.0.requires.iter() {
-            if !p.0.provides.contains(x) {
-                requires.insert_mut(x.clone());
-            }
-        }
+        let mut provides = set_union_own(p.provides(), q.provides());
+        let mut requires = q.requires();
+        set_diff_mut(&mut requires, &p.provides());
+        let requires = set_union_own(requires, p.requires());
         let has_symbol = p.has_symbol() || q.has_symbol();
-        Self(Rc::new(TypeData {
-            data: TypeEnum::Quantification {
-                has_symbol,
-                quantifier: p,
-                predicate: q,
-            },
+        Self(Rc::new(TypeEnum::Quantification {
+            has_symbol,
+            quantifier: p,
+            predicate: q,
             provides,
             requires,
         }))
+    }
+    fn requires(&self) -> HashTrieSet<G::Id> {
+        use TypeEnum::*;
+        match self.0.as_ref() {
+            Symbol { .. } => HashTrieSet::new(),
+            Reference { requires, .. } | Quantification { requires, .. } => requires.clone(),
+        }
+    }
+    fn provides(&self) -> HashTrieSet<G::Id> {
+        use TypeEnum::*;
+        match self.0.as_ref() {
+            Symbol { provides, .. } | Quantification { provides, .. } => provides.clone(),
+            Reference { .. } => HashTrieSet::new(),
+        }
+    }
+    fn has_symbol(&self) -> bool {
+        use TypeEnum::*;
+        match self.0.as_ref() {
+            Symbol { .. } => true,
+            Reference { .. } => false,
+            Quantification { has_symbol, .. } => *has_symbol,
+        }
+    }
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+    fn dfs_deref(&self, symbols: &mut HashTrieMap<G::Id, Type<G>>) -> Type<G> {
+        use TypeEnum::*;
+        match self.0.as_ref() {
+            Symbol { id, ref_ptr, .. } => {
+                symbols.insert_mut(id.clone(), self.clone());
+                ref_ptr.clone()
+            }
+            Reference { .. } => self.clone(),
+            Quantification {
+                quantifier: p,
+                predicate: q,
+                has_symbol,
+                ..
+            } => {
+                if !has_symbol {
+                    return self.clone();
+                }
+                let p2 = Self::dfs_deref(p, symbols);
+                let q2 = Self::dfs_deref(q, symbols);
+                if Rc::ptr_eq(&p.0, &p2.0) && Rc::ptr_eq(&q.0, &q2.0) {
+                    self.clone()
+                } else {
+                    Self::new_quant(p2, q2)
+                }
+            }
+        }
+    }
+    fn dfs_check(a: &Type<G>, b: &Type<G>) -> bool {
+        todo!()
+    }
+    fn dfs_match(
+        &self,
+        param: &Type<G>,
+        registry: &HashTrieMap<G::Id, Type<G>>,
+        required: &HashTrieSet<G::Id>,
+        symbols: &mut HashTrieMap<G::Id, Type<G>>,
+    ) -> crate::err::Result<()> {
+        use TypeEnum::*;
+        match self.0.as_ref() {
+            Symbol { id, .. } => {
+                if required.contains(id) {
+                    registry.insert_mut(id.clone(), param.dfs_deref(symbols));
+                }
+                Ok(())
+            }
+            Reference { id, .. } => {
+                let fulfilled = registry.get(id).unwrap();
+                if Self::dfs_check(fulfilled, param) {
+                    Ok(())
+                } else {
+                    Err(OperationError::new("Type mismatch inside reference"))
+                }
+            }
+            Quantification {
+                quantifier: p1,
+                predicate: q1,
+                ..
+            } => match param.0.as_ref() {
+                Quantification {
+                    quantifier: p2,
+                    predicate: q2,
+                    ..
+                } => {
+                    Self::dfs_match(
+                        p1,
+                        p2,
+                        registry,
+                        &set_union(required, &q1.requires()),
+                        symbols,
+                    )?;
+                    Self::dfs_match(q1, q2, registry, required, symbols)?;
+                    Ok(())
+                }
+                _ => Err(OperationError::new("Param type is not specific enough")),
+            },
+        }
+    }
+    fn dfs_apply(this: &Type<G>, registry: &HashTrieMap<G::Id, Type<G>>) -> Type<G> {
+        match this.0.as_ref() {
+            TypeEnum::Symbol(_) => this.clone(),
+            TypeEnum::Reference(v) => registry.get(&v.id).unwrap_or(&this).clone(),
+            TypeEnum::Quantification(v) => {
+                let (p, q) = (&v.quantifier, &v.predicate);
+                let p2 = Self::dfs_apply(p, registry);
+                let q2 = Self::dfs_apply(q, registry);
+                if Rc::ptr_eq(&p.0, &p2.0) && Rc::ptr_eq(&q.0, &q2.0) {
+                    this.clone()
+                } else {
+                    Quantification::new(p2, q2).into()
+                }
+            }
+        }
     }
 }
 
@@ -98,7 +222,7 @@ impl<G: IdGenerator> Clone for BoundedType<G> {
 impl<G: IdGenerator> TryFrom<Type<G>> for BoundedType<G> {
     type Error = crate::err::OperationError;
     fn try_from(ty: Type<G>) -> crate::err::Result<Self> {
-        if ty.0.requires.is_empty() {
+        if ty.requires().is_empty() {
             Ok(Self(ty))
         } else {
             Err(crate::err::OperationError::new("Type is not bounded"))
@@ -107,97 +231,6 @@ impl<G: IdGenerator> TryFrom<Type<G>> for BoundedType<G> {
 }
 
 impl<G: IdGenerator> BoundedType<G> {
-    fn dfs_check(a: &Type<G>, b: &Type<G>) -> bool {
-        todo!()
-    }
-    fn dfs_deref(a: &Type<G>) -> Type<G> {
-        if !a.has_symbol() {
-            return a.clone();
-        }
-        use TypeEnum::*;
-        match &a.0.data {
-            Symbol { ref_self, .. } => ref_self.clone(),
-            Reference { .. } => a.clone(),
-            Quantification {
-                quantifier: p,
-                predicate: q,
-                ..
-            } => {
-                let p2 = Self::dfs_deref(p);
-                let q2 = Self::dfs_deref(q);
-                if Rc::ptr_eq(&p.0, &p2.0) && Rc::ptr_eq(&q.0, &q2.0) {
-                    a.clone()
-                } else {
-                    Type::new_quant(p2, q2)
-                }
-            }
-        }
-    }
-    fn dfs_match(
-        func: &Type<G>,
-        param: &Type<G>,
-        registry: &mut HashTrieMap<G::Id, Type<G>>,
-        required: &mut HashTrieSet<G::Id>,
-    ) -> crate::err::Result<()> {
-        use TypeEnum::*;
-        match &func.0.data {
-            Symbol { id, .. } => {
-                if required.remove_mut(id) {
-                    todo!("Convert param to reference");
-                    registry.insert_mut(id.clone(), param.clone());
-                }
-                Ok(())
-            }
-            Reference { id } => {
-                let fulfilled = registry.get(id).unwrap();
-                if Self::dfs_check(fulfilled, param) {
-                    Ok(())
-                } else {
-                    Err(OperationError::new("Type mismatch inside reference"))
-                }
-            }
-            Quantification {
-                quantifier: p,
-                predicate: q,
-                ..
-            } => match &param.0.data {
-                Quantification {
-                    quantifier: p2,
-                    predicate: q2,
-                    ..
-                } => {
-                    set_union(required, &mut q.0.requires.clone());
-                    Self::dfs_match(p, p2, registry, required)?;
-                    Self::dfs_match(q, q2, registry, required)?;
-                    Ok(())
-                }
-                _ => Err(OperationError::new("Param type is not specific enough")),
-            },
-        }
-    }
-    fn dfs_apply(this: &Type<G>, registry: &HashTrieMap<G::Id, Type<G>>) -> Type<G> {
-        if this.0.requires.size() == 0 {
-            return this.clone();
-        }
-        use TypeEnum::*;
-        match &this.0.data {
-            Symbol { .. } => this.clone(),
-            Reference { id } => registry.get(id).unwrap_or(&this).clone(),
-            Quantification {
-                quantifier: p,
-                predicate: q,
-                ..
-            } => {
-                let p2 = Self::dfs_apply(p, registry);
-                let q2 = Self::dfs_apply(q, registry);
-                if Rc::ptr_eq(&p.0, &p2.0) && Rc::ptr_eq(&q.0, &q2.0) {
-                    this.clone()
-                } else {
-                    Type::new_quant(p2, q2)
-                }
-            }
-        }
-    }
     pub fn apply(&self, param: &Self) -> crate::err::Result<BoundedType<G>> {
         use TypeEnum::*;
         match &self.0 .0.data {
