@@ -16,39 +16,23 @@ use crate::{
 };
 
 enum Element<G: IdGenerator, P> {
-    Argument { pos: NonZeroUsize, ty: ty::Type },
+    Argument { pos: NonZeroUsize },
     Object { id: G::Id, params: Vec<P> },
-    Universal { ty: ty::Type, body: P },
-    Application { ty: ty::Type, arg: P, body: P },
-}
-impl<G: IdGenerator, P> Element<G, P> {
-    fn ty(&self, reg: &mut ty::Registry) -> ty::Type {
-        match self {
-            Element::Argument { ty, .. } => ty.clone(),
-            Element::Object { .. } => reg.symbol(),
-            Element::Universal { ty, .. } => ty.clone(),
-            Element::Application { ty, .. } => ty.clone(),
-        }
-    }
+    Universal { body: P },
+    Application { arg: P, body: P },
 }
 
 enum CacheEnum<G: IdGenerator, P> {
     Primitive(Element<G, P>),
-    Bind { body: P, arg: P, ty: ty::Type },
+    Bind { body: P, arg: P },
     RefShift(P, NonZeroUsize),
 }
 struct CacheElement<G: IdGenerator> {
     data: RefCell<CacheEnum<G, Rc<Self>>>,
     max_ref: usize,
+    ty: ty::Type,
 }
 impl<G: IdGenerator> CacheElement<G> {
-    fn ty(&self, reg: &mut ty::Registry) -> ty::Type {
-        match &*self.data.borrow() {
-            CacheEnum::Primitive(el) => el.ty(reg),
-            CacheEnum::Bind { ty, .. } => ty.clone(),
-            CacheEnum::RefShift(el, _) => el.ty(reg),
-        }
-    }
     fn unwrap_one(&self) -> Ref<'_, Element<G, Rc<Self>>> {
         use CacheEnum::*;
         Ref::map(self.data.borrow(), |x| match x {
@@ -83,34 +67,25 @@ impl<G: IdGenerator> CacheElement<G> {
                     .zip(params2.iter())
                     .all(|(x, y)| Self::check_equal(x, y))
             }
-            (
-                Universal {
-                    ty: ty1,
-                    body: body1,
-                },
-                Universal {
-                    ty: ty2,
-                    body: body2,
-                },
-            ) => Self::check_equal(body1, body2),
+            (Universal { body: body1 }, Universal { body: body2 }) => {
+                Self::check_equal(body1, body2)
+            }
             (
                 Application {
                     arg: arg1,
                     body: body1,
-                    ..
                 },
                 Application {
                     arg: arg2,
                     body: body2,
-                    ..
                 },
             ) => Self::check_equal(arg1, arg2) && Self::check_equal(body1, body2),
             _ => false,
         }
     }
 }
-impl<G: IdGenerator> From<Element<G, Rc<Self>>> for CacheElement<G> {
-    fn from(el: Element<G, Rc<Self>>) -> Self {
+impl<G: IdGenerator> From<(Element<G, Rc<Self>>, ty::Type)> for CacheElement<G> {
+    fn from((el, ty): (Element<G, Rc<Self>>, ty::Type)) -> Self {
         use Element::*;
         let max_ref = match &el {
             Argument { pos, .. } => pos.get(),
@@ -121,6 +96,7 @@ impl<G: IdGenerator> From<Element<G, Rc<Self>>> for CacheElement<G> {
         CacheElement {
             data: RefCell::new(CacheEnum::Primitive(el)),
             max_ref,
+            ty,
         }
     }
 }
@@ -210,34 +186,34 @@ impl<G: IdGenerator> Verifier<G> {
     }
 
     fn add_obj(&mut self, n: usize, s: String, id: G::Id) -> Result<()> {
-        let mut el = Rc::new(
-            Element::Object {
-                id: id,
-                params: (1..=n)
-                    .rev()
-                    .map(|x| {
-                        Rc::new(
-                            Element::Argument {
-                                pos: x.try_into().unwrap(),
-                                ty: self.ty_reg.symbol(),
-                            }
-                            .into(),
-                        )
-                    })
-                    .collect(),
-            }
-            .into(),
+        let mut el: Rc<CacheElement<_>> = Rc::new(
+            (
+                Element::Object {
+                    id: id,
+                    params: (1..=n)
+                        .rev()
+                        .map(|x| {
+                            Rc::new(
+                                (
+                                    Element::Argument {
+                                        pos: x.try_into().unwrap(),
+                                    },
+                                    self.ty_reg.symbol(),
+                                )
+                                    .into(),
+                            )
+                        })
+                        .collect(),
+                },
+                self.ty_reg.symbol(),
+            )
+                .into(),
         );
         for _ in 0..n {
-            el = Rc::new(
-                Element::Universal {
-                    ty: self.ty_reg.symbol(),
-                    body: el,
-                }
-                .into(),
-            );
+            let ty = self.ty_reg.infer(self.ty_reg.symbol(), el.ty);
+            el = Rc::new((Element::Universal { body: el }, ty).into());
         }
-        self.add_sym(s, false, el);
+        self.add_sym(s, false, el)?;
         Ok(())
     }
 
@@ -284,30 +260,24 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         } else {
             return Err(OperationError::new("Using app on an invalid element"));
         };
+        let ty = f.ty.apply(&x.ty)?;
         let f_el = f.unwrap_one();
         let f_ref = f_el.deref();
         let el = StackElement::Element(Rc::new(match f_ref {
-            Element::Universal { body, ty: f_ty } => {
-                let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+            Element::Universal { body } => {
                 let max_ref = max(x.max_ref, f.max_ref);
                 CacheElement {
                     data: RefCell::new(CacheEnum::Bind {
                         body: body.clone(),
                         arg: x,
-                        ty,
                     }),
                     max_ref,
+                    ty,
                 }
             }
-            Element::Application { ty: f_ty, .. } | Element::Argument { ty: f_ty, .. } => {
-                let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+            Element::Application { .. } | Element::Argument { .. } => {
                 std::mem::drop(f_el);
-                Element::Application {
-                    ty,
-                    arg: x,
-                    body: f,
-                }
-                .into()
+                (Element::Application { arg: x, body: f }, ty).into()
             }
             _ => return Err(OperationError::new("Using app on an invalid element")),
         }));
@@ -328,11 +298,11 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
             )));
         }
         self.push(StackElement::Element(Rc::new(
-            Element::Argument {
-                pos: n,
-                ty: self.arg_stack[self.arg_stack.len() - n.get()].clone(),
-            }
-            .into(),
+            (
+                Element::Argument { pos: n },
+                self.arg_stack[self.arg_stack.len() - n.get()].clone(),
+            )
+                .into(),
         )));
         Ok(())
     }
@@ -376,7 +346,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         if el.max_ref != 0 {
             return Err(OperationError::new("Exporting an unbounded element"));
         }
-        self.add_sym(s, false, el);
+        self.add_sym(s, false, el)?;
         Ok(())
     }
 
@@ -415,10 +385,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
                 } else {
                     return Err(OperationError::new("End of proof without an argument"));
                 };
-                let body_ty = el.ty(&mut self.ty_reg);
-                let ty = self.ty_reg.infer(param_ty, body_ty);
+                let ty = self.ty_reg.infer(param_ty, el.ty.clone());
                 self.stack.push(StackElement::Element(Rc::new(
-                    Element::Universal { body: el, ty }.into(),
+                    (Element::Universal { body: el }, ty).into(),
                 )));
             }
         }
