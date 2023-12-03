@@ -2,11 +2,12 @@ use std::{
     cell::RefCell,
     collections::HashSet,
     hash::{BuildHasher, Hash, Hasher},
+    ops::Deref,
     rc::{Rc, Weak},
 };
 
 pub trait Dedup {
-    type Ptr: Eq + Clone + Hash + Ord;
+    type Ptr: Eq + Clone + Hash + Ord + Deref<Target = Self::Key>;
     type Key: Eq;
     fn get(&mut self, key: Self::Key) -> Self::Ptr;
 }
@@ -90,6 +91,12 @@ impl<K: Eq + Hash> HashDedup<K> {
         Self {
             map: Rc::new(RefCell::new(HashSet::new())),
         }
+    }
+}
+impl<K: Eq + Hash> Deref for HashDedupPtr<K> {
+    type Target = K;
+    fn deref(&self) -> &Self::Target {
+        &self.data.key
     }
 }
 impl<K: Eq + Hash> Dedup for HashDedup<K> {

@@ -1,28 +1,31 @@
-use super::err::Result;
+use std::num::NonZeroUsize;
+
+use crate::err::Result;
 
 pub trait InstructionSet {
     /// Universal quantification
     fn uni(&mut self) -> Result<()>;
-    fn def(&mut self, s: String) -> Result<()>;
-    fn hyp(&mut self, s: String) -> Result<()>; // To imaginary mode
-    fn obj(&mut self, s: String) -> Result<()>; // No act
 
     /// Types
     fn var(&mut self) -> Result<()>;
     fn hkt(&mut self) -> Result<()>; // [..., P, Q] => [..., P=>Q]
 
-    /// Predicate
+    // End of arguments or body
     fn qed(&mut self) -> Result<()>;
 
     /// Logic
     fn mp(&mut self) -> Result<()>; // [..., P=>Q, P] => [..., Q]
-    fn im(&mut self) -> Result<()>; // To imaginary mode
-    fn app(&mut self) -> Result<()>; // [..., x->f(x), y] => [..., f(y)]
+    fn app(&mut self) -> Result<()>; // [..., x->f(x), syn, y] => [..., f(y)]
 
     /// Import
     fn req(&mut self, s: String) -> Result<()>;
+    fn def(&mut self, s: String) -> Result<()>; // [..., y] => [...]
+    fn hyp(&mut self, s: String) -> Result<()>; // [..., syn, y] => [...]
 
-    /// Imaginary mode only
+    fn obj(&mut self, n: usize, s: String) -> Result<()>;
+
+    fn syn(&mut self) -> Result<()>; // [...] => [..., syn]
+    /// Synthetic mode only
     fn sat(&mut self) -> Result<()>;
-    fn arg(&mut self, n: usize) -> Result<()>;
+    fn arg(&mut self, n: NonZeroUsize) -> Result<()>;
 }

@@ -1,7 +1,4 @@
-use crate::{
-    ds::dedup::{Dedup, HashDedup},
-    err::OperationError,
-};
+use crate::ds::dedup::{Dedup, HashDedup};
 
 #[derive(Hash, PartialEq, Eq)]
 enum TypeEnum {
@@ -14,26 +11,32 @@ enum TypeEnum {
 
 pub struct Registry {
     dedup: HashDedup<TypeEnum>,
+    symbol: Type,
 }
 
 impl Registry {
-    fn new() -> Self {
+    pub fn new() -> Self {
+        let mut dedup = HashDedup::new();
+        let symbol = dedup.get(TypeEnum::Symbol);
         Self {
-            dedup: HashDedup::new(),
+            dedup,
+            symbol: Type { data: symbol },
         }
     }
-    fn new_symbol(&mut self) -> Type {
+    pub fn symbol(&mut self) -> Type {
+        self.symbol.clone()
+    }
+    pub fn infer(&mut self, a: Type, b: Type) -> Type {
         Type {
-            data: self.dedup.get(TypeEnum::Symbol),
+            data: self.dedup.get(TypeEnum::Inference(a.data, b.data)),
         }
     }
-    fn new_infer(&mut self, a: Type, b: Type) -> Result<Type, OperationError> {
-        Ok(Type {
-            data: self.dedup.get(TypeEnum::Inference(a.data, b.data)),
-        })
+    pub fn check(&mut self, spec: &Self) -> bool {
+        todo!()
     }
 }
 
+#[derive(Clone)]
 pub struct Type {
     data: <HashDedup<TypeEnum> as Dedup>::Ptr,
 }
