@@ -1,13 +1,13 @@
 use rpds::HashTrieSet;
 use std::hash::Hash;
 
-fn set_union_<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
+fn set_union_<T: Clone + Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
     for x in b.iter() {
         a.insert_mut(x.clone());
     }
 }
 
-pub fn set_union_own<T: Hash + Eq>(mut a: HashTrieSet<T>, mut b: HashTrieSet<T>) -> HashTrieSet<T> {
+pub fn set_union_own<T: Clone + Hash + Eq>(a: HashTrieSet<T>, b: HashTrieSet<T>) -> HashTrieSet<T> {
     let (mut a, b) = if a.size() >= b.size() {
         (a, &b)
     } else {
@@ -17,7 +17,7 @@ pub fn set_union_own<T: Hash + Eq>(mut a: HashTrieSet<T>, mut b: HashTrieSet<T>)
     a
 }
 
-pub fn set_union_mut<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
+pub fn set_union_mut<T: Clone + Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
     if a.size() >= b.size() {
         set_union_(a, b)
     } else {
@@ -27,7 +27,7 @@ pub fn set_union_mut<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
     }
 }
 
-pub fn set_union<T: Hash + Eq>(a: &HashTrieSet<T>, b: &HashTrieSet<T>) -> HashTrieSet<T> {
+pub fn set_union<T: Clone + Hash + Eq>(a: &HashTrieSet<T>, b: &HashTrieSet<T>) -> HashTrieSet<T> {
     let (mut a, b) = if a.size() > b.size() {
         (a.clone(), b)
     } else {
@@ -44,10 +44,10 @@ fn set_diff1<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
 }
 
 fn set_diff2<T: Clone + Hash + Eq>(a: &HashTrieSet<T>, b: &HashTrieSet<T>) -> HashTrieSet<T> {
-    a.iter().filter(|&x| !b.contains(x)).collect()
+    a.iter().filter(|&x| !b.contains(x)).map(|x| x.clone()).collect()
 }
 
-pub fn set_diff_mut<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
+pub fn set_diff_mut<T: Clone + Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
     if a.size() < b.size() {
         *a = set_diff2(a, b);
     } else {
@@ -55,7 +55,7 @@ pub fn set_diff_mut<T: Hash + Eq>(a: &mut HashTrieSet<T>, b: &HashTrieSet<T>) {
     }
 }
 
-pub fn set_diff<T: Hash + Eq>(a: &HashTrieSet<T>, b: &HashTrieSet<T>) -> HashTrieSet<T> {
+pub fn set_diff<T: Clone + Hash + Eq>(a: &HashTrieSet<T>, b: &HashTrieSet<T>) -> HashTrieSet<T> {
     if a.size() < b.size() {
         set_diff2(a, b)
     } else {
