@@ -1,10 +1,10 @@
 mod ty;
 
-use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
+use std::{cell::RefCell, cmp::max, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
 use crate::{
     err::{OperationError, Result},
-    util::IdGenerator,
+    util::{CountGenerator, IdGenerator},
 };
 
 enum Element<G: IdGenerator, P> {
@@ -20,7 +20,7 @@ impl<G: IdGenerator, P> Element<G, P> {
             Element::Argument { ty, .. } => ty.clone(),
             Element::Object { .. } => reg.symbol(),
             Element::Universal { ty, .. } => ty.clone(),
-            Element::Implication(p, q) => reg.symbol(),
+            Element::Implication(..) => reg.symbol(),
             Element::Application { ty, .. } => ty.clone(),
         }
     }
@@ -43,6 +43,28 @@ impl<G: IdGenerator> CacheElement<G> {
             CacheEnum::RefShift(el, _) => el.ty(reg),
         }
     }
+    fn unwrap_one(&self) -> &Element<G, Rc<Self>> {
+        todo!()
+    }
+    fn check_equal(a: &Rc<Self>, b: &Rc<Self>) -> bool {
+        todo!()
+    }
+}
+impl<G: IdGenerator> From<Element<G, Rc<Self>>> for CacheElement<G> {
+    fn from(el: Element<G, Rc<Self>>) -> Self {
+        use Element::*;
+        let max_ref = match &el {
+            Argument { pos, .. } => pos.get(),
+            Object { params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
+            Universal { body, .. } => max(body.max_ref, 1) - 1,
+            Implication(p, q) => max(p.max_ref, q.max_ref),
+            Application { arg, body, .. } => max(arg.max_ref, max(body.max_ref, 1) - 1),
+        };
+        CacheElement {
+            data: RefCell::new(CacheEnum::Primitive(el)),
+            max_ref,
+        }
+    }
 }
 
 enum StackElement<G: IdGenerator> {
@@ -52,7 +74,7 @@ enum StackElement<G: IdGenerator> {
     Element(Rc<CacheElement<G>>),
 }
 
-pub struct Verifier<G: IdGenerator> {
+pub struct Verifier<G: IdGenerator = CountGenerator> {
     obj_id: G,
     is_syn: bool,
     arg_stack: Vec<ty::Type>,
@@ -113,7 +135,41 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn app(&mut self) -> Result<()> {
-        todo!()
+        let x = if let StackElement::Element(x) = self.pop()? {
+            x
+        } else {
+            return Err(OperationError::new("Using app on an invalid element"));
+        };
+        let f = if let StackElement::Element(f) = self.pop()? {
+            f
+        } else {
+            return Err(OperationError::new("Using app on an invalid element"));
+        };
+        let el = StackElement::Element(Rc::new(match f.unwrap_one() {
+            Element::Universal { body, ty: f_ty } => {
+                let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+                CacheElement {
+                    data: RefCell::new(CacheEnum::Bind {
+                        body: body.clone(),
+                        arg: x,
+                        ty,
+                    }),
+                    max_ref: f.max_ref,
+                }
+            }
+            Element::Application { ty: f_ty, .. } | Element::Argument { ty: f_ty, .. } => {
+                let ty = f_ty.apply(&x.ty(&mut self.ty_reg))?;
+                Element::Application {
+                    ty: ty,
+                    arg: x,
+                    body: f,
+                }
+                .into()
+            }
+            _ => return Err(OperationError::new("Using app on an invalid element")),
+        }));
+        self.push(el);
+        Ok(())
     }
 
     fn arg(&mut self, n: NonZeroUsize) -> Result<()> {
@@ -182,15 +238,75 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn obj(&mut self, n: usize, s: String) -> Result<()> {
-        todo!()
+        let mut el = Rc::new(
+            Element::Object {
+                id: self.obj_id.new(),
+                params: (1..=n)
+                    .map(|x| {
+                        Rc::new(
+                            Element::Argument {
+                                pos: x.try_into().unwrap(),
+                                ty: self.ty_reg.symbol(),
+                            }
+                            .into(),
+                        )
+                    })
+                    .collect(),
+            }
+            .into(),
+        );
+        for _ in 0..n {
+            el = Rc::new(
+                Element::Universal {
+                    ty: self.ty_reg.symbol(),
+                    body: el,
+                }
+                .into(),
+            );
+        }
+        self.sym_table.insert(s, (false, el));
+        Ok(())
     }
 
     fn hkt(&mut self) -> Result<()> {
-        todo!()
+        let el = s_top(&mut self.stack)?;
+        let vec = if let StackElement::Types(vec) = el {
+            vec
+        } else {
+            return Err(OperationError::new("Using hkt without uni"));
+        };
+        let q = s_pop(vec)?;
+        let p = s_pop(vec)?;
+        vec.push(self.ty_reg.infer(p, q));
+        Ok(())
     }
     fn qed(&mut self) -> Result<()> {
-        todo!()
+        match self.pop()? {
+            StackElement::Argument | StackElement::Synthetic => {
+                return Err(OperationError::new("Calling qed without uni"))
+            }
+            StackElement::Types(vec) => {
+                for ty in vec.into_iter() {
+                    self.arg_stack.push(ty);
+                    self.stack.push(StackElement::Argument);
+                }
+            }
+            StackElement::Element(el) => {
+                let param_ty = if let StackElement::Argument = self.pop()? {
+                    self.arg_stack.pop().unwrap()
+                } else {
+                    return Err(OperationError::new("End of proof without an argument"));
+                };
+                let body_ty = el.ty(&mut self.ty_reg);
+                let ty = self.ty_reg.infer(param_ty, body_ty);
+                self.stack.push(StackElement::Element(Rc::new(
+                    Element::Universal { body: el, ty }.into(),
+                )));
+            }
+        }
+        Ok(())
     }
+
     fn req(&mut self, s: String) -> Result<()> {
         let (is_real, el) = self
             .sym_table
@@ -205,27 +321,60 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         self.push(StackElement::Element(el.clone()));
         Ok(())
     }
+
     fn mp(&mut self) -> Result<()> {
         if self.is_syn {
             return Err(OperationError::new(
                 "Use sat instead of mp in synthetic mode",
             ));
         }
-        let p_pred = self.pop()?;
-        let pq = self.pop()?;
-        todo!()
+        let p = if let StackElement::Element(p) = self.pop()? {
+            p
+        } else {
+            return Err(OperationError::new("Using mp on an invalid element"));
+        };
+        let pq = if let StackElement::Element(pq) = self.pop()? {
+            pq
+        } else {
+            return Err(OperationError::new("Using mp on an invalid element"));
+        };
+        let (p_ans, q) = if let Element::Implication(p_ans, q) = pq.unwrap_one() {
+            (p_ans, q)
+        } else {
+            return Err(OperationError::new(
+                "Using mp on an non-implication element",
+            ));
+        };
+        if !CacheElement::check_equal(p_ans, &p) {
+            return Err(OperationError::new("Using mp but condition not met"));
+        }
+        self.push(StackElement::Element(q.clone()));
+        Ok(())
     }
+
     fn sat(&mut self) -> Result<()> {
         if !self.is_syn {
             return Err(OperationError::new("Using sat in non-synthetic mode"));
         }
-        todo!()
+        let el = self.pop();
+        let el = if let StackElement::Element(el) = el? {
+            el
+        } else {
+            return Err(OperationError::new("Using sat on an invalid element"));
+        };
+        let q = if let Element::Implication(_, q) = el.unwrap_one() {
+            q
+        } else {
+            return Err(OperationError::new(
+                "Using sat on an non-implication element",
+            ));
+        };
+        self.push(StackElement::Element(q.clone()));
+        Ok(())
     }
+
     fn var(&mut self) -> Result<()> {
-        let el = self
-            .stack
-            .last_mut()
-            .ok_or_else(|| OperationError::new("Using var without uni"))?;
+        let el = s_top(&mut self.stack)?;
         let vec = if let StackElement::Types(vec) = el {
             vec
         } else {
