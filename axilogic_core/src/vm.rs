@@ -37,8 +37,8 @@ impl<G: IdGenerator> CacheElement<G> {
         use CacheEnum::*;
         Ref::map(self.data.borrow(), |x| match x {
             Primitive(el) => el,
-            Bind { body, .. } => todo!(),
-            RefShift(el, _) => todo!(),
+            Bind { .. } => todo!(),
+            RefShift(_, _) => todo!(),
         })
     }
     fn check_equal(a: &Rc<Self>, b: &Rc<Self>) -> bool {
@@ -83,21 +83,23 @@ impl<G: IdGenerator> CacheElement<G> {
             _ => false,
         }
     }
-}
-impl<G: IdGenerator> From<(Element<G, Rc<Self>>, ty::Type)> for CacheElement<G> {
-    fn from((el, ty): (Element<G, Rc<Self>>, ty::Type)) -> Self {
-        use Element::*;
-        let max_ref = match &el {
-            Argument { pos, .. } => pos.get(),
-            Object { params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
-            Universal { body, .. } => max(body.max_ref, 1) - 1,
-            Application { arg, body, .. } => max(arg.max_ref, max(body.max_ref, 1) - 1),
-        };
-        CacheElement {
+
+    fn new_primitive(el: Element<G, Rc<Self>>, max_ref: usize, ty: ty::Type) -> Rc<Self> {
+        Rc::new(Self {
             data: RefCell::new(CacheEnum::Primitive(el)),
             max_ref,
             ty,
-        }
+        })
+    }
+
+    fn new_argument(pos: NonZeroUsize, ty: ty::Type) -> Rc<Self> {
+        Self::new_primitive(Element::Argument { pos }, pos.get(), ty)
+    }
+
+    fn new_application(arg: Rc<Self>, body: Rc<Self>) -> Rc<Self> {
+        let ty = body.ty.clone();
+        let max_ref = max(arg.max_ref, max(body.max_ref, 1) - 1);
+        Self::new_primitive(Element::Application { arg, body }, max_ref, ty)
     }
 }
 
@@ -186,32 +188,13 @@ impl<G: IdGenerator> Verifier<G> {
     }
 
     fn add_obj(&mut self, n: usize, s: String, id: G::Id) -> Result<()> {
-        let mut el: Rc<CacheElement<_>> = Rc::new(
-            (
-                Element::Object {
-                    id: id,
-                    params: (1..=n)
-                        .rev()
-                        .map(|x| {
-                            Rc::new(
-                                (
-                                    Element::Argument {
-                                        pos: x.try_into().unwrap(),
-                                    },
-                                    self.ty_reg.symbol(),
-                                )
-                                    .into(),
-                            )
-                        })
-                        .collect(),
-                },
-                self.ty_reg.symbol(),
-            )
-                .into(),
-        );
+        let arr = (1..=n)
+            .rev()
+            .map(|x| CacheElement::new_argument(x.try_into().unwrap(), self.ty_reg.symbol()))
+            .collect();
+        let mut el = self.new_object(id, arr);
         for _ in 0..n {
-            let ty = self.ty_reg.infer(self.ty_reg.symbol(), el.ty);
-            el = Rc::new((Element::Universal { body: el }, ty).into());
+            el = self.new_universal(el);
         }
         self.add_sym(s, false, el)?;
         Ok(())
@@ -236,6 +219,22 @@ impl<G: IdGenerator> Verifier<G> {
         } else {
             Err(OperationError::new("Not imply object"))
         }
+    }
+
+    fn new_object(&mut self, id: G::Id, params: Vec<Rc<CacheElement<G>>>) -> Rc<CacheElement<G>> {
+        let max_ref = params.iter().map(|x| x.max_ref).max().unwrap_or(0);
+        CacheElement::new_primitive(
+            Element::Object { id, params },
+            max_ref,
+            self.ty_reg.symbol(),
+        )
+    }
+
+    fn new_universal(&mut self, body: Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
+        let sym = self.ty_reg.symbol();
+        let ty = self.ty_reg.infer(sym, body.ty.clone());
+        let max_ref = max(body.max_ref, 1) - 1;
+        CacheElement::new_primitive(Element::Universal { body: body }, max_ref, ty)
     }
 }
 
@@ -263,24 +262,24 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let ty = f.ty.apply(&x.ty)?;
         let f_el = f.unwrap_one();
         let f_ref = f_el.deref();
-        let el = StackElement::Element(Rc::new(match f_ref {
+        let el = StackElement::Element(match f_ref {
             Element::Universal { body } => {
                 let max_ref = max(x.max_ref, f.max_ref);
-                CacheElement {
+                Rc::new(CacheElement {
                     data: RefCell::new(CacheEnum::Bind {
                         body: body.clone(),
                         arg: x,
                     }),
                     max_ref,
                     ty,
-                }
+                })
             }
             Element::Application { .. } | Element::Argument { .. } => {
                 std::mem::drop(f_el);
-                (Element::Application { arg: x, body: f }, ty).into()
+                CacheElement::new_application(x, f)
             }
             _ => return Err(OperationError::new("Using app on an invalid element")),
-        }));
+        });
         self.push(el);
         Ok(())
     }
@@ -297,12 +296,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
                 n.get()
             )));
         }
-        self.push(StackElement::Element(Rc::new(
-            (
-                Element::Argument { pos: n },
-                self.arg_stack[self.arg_stack.len() - n.get()].clone(),
-            )
-                .into(),
+        self.push(StackElement::Element(CacheElement::new_argument(
+            n,
+            self.arg_stack[self.arg_stack.len() - n.get()].clone(),
         )));
         Ok(())
     }
@@ -380,15 +376,13 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
                 }
             }
             StackElement::Element(el) => {
-                let param_ty = if let StackElement::Argument = self.pop()? {
-                    self.arg_stack.pop().unwrap()
+                if let StackElement::Argument = self.pop()? {
+                    self.arg_stack.pop().unwrap();
                 } else {
                     return Err(OperationError::new("End of proof without an argument"));
                 };
-                let ty = self.ty_reg.infer(param_ty, el.ty.clone());
-                self.stack.push(StackElement::Element(Rc::new(
-                    (Element::Universal { body: el }, ty).into(),
-                )));
+                let el = StackElement::Element(self.new_universal(el));
+                self.stack.push(el);
             }
         }
         Ok(())
