@@ -18,7 +18,7 @@ pub trait InstructionSet {
     fn app(&mut self) -> Result<()>; // [..., x->f(x), syn, y] => [..., f(y)]
 
     /// Import
-    fn req(&mut self, s: String) -> Result<()>;
+    fn req(&mut self, s: &str) -> Result<()>;
     fn def(&mut self, s: String) -> Result<()>; // [..., y] => [...]
     fn hyp(&mut self, s: String) -> Result<()>; // [..., syn, y] => [...]
 

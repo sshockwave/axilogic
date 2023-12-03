@@ -7,11 +7,13 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     rc::Rc,
+    str::pattern::Pattern,
 };
 
 use crate::{
     err::{OperationError, Result},
     isa::InstructionSet,
+    kit::{imply, not, Expression, Forall},
     util::{CountGenerator, IdGenerator},
 };
 
@@ -135,42 +137,53 @@ fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
 }
 
 impl<G: IdGenerator> Verifier<G> {
-    fn init_l1(&mut self) -> Result<()> {
-        self.syn()?;
-        self.uni()?;
-        self.var()?;
-        self.var()?;
-        self.qed()?;
-        {
-            self.req("sys::imply".into())?;
-            self.syn()?;
-            self.arg(2.try_into().unwrap())?;
-            self.app()?;
-            self.syn()?;
-            {
-                self.req("sys::imply".into())?;
-                self.syn()?;
-                self.arg(1.try_into().unwrap())?;
-                self.app();
-                self.syn()?;
-                self.arg(2.try_into().unwrap())?;
-                self.app();
-            }
-            self.app()?;
-        }
-        self.qed()?;
-        self.qed()?;
-        let name = "sys::l1";
-        self.hyp(name.into())?;
+    fn set_real(&mut self, name: &str) {
         self.sym_table.get_mut(name).unwrap().0 = true;
+    }
+
+    fn init_l1(&mut self) -> Result<()> {
+        let name = "sys::l1";
+        Forall::new(2, |args| {
+            let a = args[0];
+            let b = args[1];
+            imply(a.into(), imply(b.into(), a.into()))
+        })
+        .export(self, name.into(), false)?;
+        self.set_real(name);
         Ok(())
     }
+
     fn init_l2(&mut self) -> Result<()> {
-        todo!()
+        let name = "sys::l2";
+        Forall::new(3, |args| {
+            let a = args[0];
+            let b = args[1];
+            let c = args[2];
+            imply(
+                imply(a.into(), imply(b.into(), c.into())),
+                imply(imply(a.into(), b.into()), imply(a.into(), c.into())),
+            )
+        })
+        .export(self, name.into(), false)?;
+        self.set_real(name);
+        Ok(())
     }
+
     fn init_l3(&mut self) -> Result<()> {
-        todo!()
+        let name = "sys::l3";
+        Forall::new(2, |args| {
+            let a = args[0];
+            let b = args[1];
+            imply(
+                imply(not(a.into()), not(b.into())),
+                imply(b.into(), a.into()),
+            )
+        })
+        .export(self, name.into(), false)?;
+        self.set_real(name);
+        Ok(())
     }
+
     pub fn init_sys(&mut self) -> Result<()> {
         self.obj(1, "sys::not".into())?;
         self.add_obj(1, "sys::imply".into(), self.imply_id.clone())?;
@@ -412,10 +425,10 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         Ok(())
     }
 
-    fn req(&mut self, s: String) -> Result<()> {
+    fn req(&mut self, s: &str) -> Result<()> {
         let (is_real, el) = self
             .sym_table
-            .get(&s)
+            .get(s)
             .ok_or_else(|| OperationError::new(format!("Symbol not found: {}", s)))?;
         if !is_real && self.syn_cnt == 0 {
             return Err(OperationError::new(format!(
