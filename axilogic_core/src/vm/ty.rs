@@ -37,12 +37,8 @@ impl Registry {
 }
 
 type Ptr = <HashDedup<TypeEnum> as Dedup>::Ptr;
-#[derive(Clone)]
-pub struct Type {
-    data: Ptr,
-}
 
-impl Type {
+impl TypeEnum {
     fn dfs_check(a: &Ptr, b: &Ptr) -> bool {
         if a == b {
             return true;
@@ -56,17 +52,43 @@ impl Type {
             (Inference(..), Symbol) => false,
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Type {
+    data: Ptr,
+}
+
+impl Type {
     pub fn apply(&self, spec: &Self) -> Result<Type> {
         use TypeEnum::*;
         match self.data.deref() {
             Symbol => Err(OperationError::new("cannot apply symbol type")),
             Inference(p, q) => {
-                if Self::dfs_check(p, &spec.data) {
+                if TypeEnum::dfs_check(p, &spec.data) {
                     Ok(Type { data: q.clone() })
                 } else {
                     Err(OperationError::new("Type mismatch for application"))
                 }
             }
+        }
+    }
+}
+
+impl std::fmt::Debug for TypeEnum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeEnum::Symbol => write!(f, "@"),
+            TypeEnum::Inference(p, q) => write!(f, "({:?}=>{:?})", p.deref(), q.deref()),
+        }
+    }
+}
+
+impl std::fmt::Debug for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.data.deref() {
+            TypeEnum::Symbol => write!(f, "@"),
+            TypeEnum::Inference(p, q) => write!(f, "{:?}=>{:?}", p.deref(), q.deref()),
         }
     }
 }

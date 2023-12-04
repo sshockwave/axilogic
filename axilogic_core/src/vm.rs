@@ -13,7 +13,7 @@ use crate::{
     err::{OperationError, Result},
     isa::InstructionSet,
     kit::{imply, not, Expression, Forall},
-    util::{vec_rev_get, CountGenerator, IdGenerator},
+    util::{defer, vec_rev_get, CountGenerator, IdGenerator},
 };
 
 enum Element<G: IdGenerator, P: Clone> {
@@ -90,34 +90,70 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         }
     }
 
-    fn flush_enum(
-        &mut self,
-        data: &mut CacheEnum<G, Rc<CacheElement<G>>>,
-    ) -> Option<CacheElement<G>> {
+    fn flush_enum(&mut self, data: &CacheEnum<G, Rc<CacheElement<G>>>) -> Option<CacheElement<G>> {
         use CacheEnum::*;
         use Element::*;
-        todo!()
+        match data {
+            Primitive(Argument { pos }) => {
+                todo!()
+            }
+            Primitive(Object { id, params }) => {
+                let results: Vec<_> = params.iter().map(|x| self.flush_ptr(x)).collect();
+                if results.iter().all(|x| x.is_none()) {
+                    return None;
+                }
+                let params = results
+                    .into_iter()
+                    .zip(params.iter())
+                    .map(|(x, orig)| x.map_or_else(|| orig.clone(), |x| Rc::new(x)))
+                    .collect();
+                Some(new_object(&mut self.ty_reg, id.clone(), params))
+            }
+            Primitive(Universal { body }) => {
+                self.arg_stack.push((None, self.tot_bind_cnt()));
+                let _ = defer(|| self.arg_stack.pop().unwrap());
+                self.flush_ptr(body)
+            }
+            Primitive(Application { arg, body }) => {
+                let arg = self
+                    .flush_ptr(arg)
+                    .map_or_else(|| arg.clone(), |x| Rc::new(x));
+                self.arg_stack.push((Some(arg), self.tot_bind_cnt() + 1));
+                let _ = defer(|| self.arg_stack.pop().unwrap());
+                self.flush_ptr(body)
+            }
+            Bind { func, arg } => {
+                let arg = self
+                    .flush_ptr(arg)
+                    .map_or_else(|| arg.clone(), |x| Rc::new(x));
+                self.bind_stack.push(arg);
+                let _ = defer(|| self.bind_stack.pop().unwrap());
+                self.flush_ptr(func)
+            }
+            RefShift(el, delta) => {
+                self.ref_shift += delta.get();
+                let _ = defer(|| self.ref_shift -= delta.get());
+                self.flush_ptr(el)
+            }
+        }
     }
 
-    fn flush_ptr(&mut self, ptr: &Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
-        let skip = if self.bind_stack.is_empty() {
-            let max_ref = max_ref_shift(ptr.max_ref, self.ref_shift);
-            let tot_bind_cnt = self.arg_stack.last().map_or(0, |x| x.1);
-            let outer_bind_cnt = vec_rev_get(&self.arg_stack, max_ref + 1).map_or(0, |x| x.1);
-            outer_bind_cnt == tot_bind_cnt
-        } else {
-            false
-        };
-        if skip {
+    fn tot_bind_cnt(&self) -> usize {
+        self.arg_stack.last().map_or(0, |x| x.1)
+    }
+
+    fn calc_new_ref(&self, pos: usize) -> usize {
+        let pos = max_ref_shift(pos, self.ref_shift);
+        let binded_cnt = vec_rev_get(&self.arg_stack, pos + 1).map_or(0, |x| x.1);
+        pos - (self.tot_bind_cnt() - binded_cnt)
+    }
+
+    fn flush_ptr(&mut self, ptr: &Rc<CacheElement<G>>) -> Option<CacheElement<G>> {
+        if self.bind_stack.is_empty() && ptr.max_ref == self.calc_new_ref(ptr.max_ref) {
             return ptr.set_shift(self.ref_shift);
         }
         let data = ptr.data.borrow();
-        let mut data = (*data).clone();
-        if let Some(el) = self.flush_enum(&mut data) {
-            Rc::new(el)
-        } else {
-            ptr.clone()
-        }
+        self.flush_enum(data.deref())
     }
 }
 
@@ -130,7 +166,7 @@ impl<'a, G: IdGenerator> Drop for CacheFlusher<'a, G> {
 }
 
 impl<G: IdGenerator> CacheElement<G> {
-    fn set_shift(self: &Rc<Self>, v: usize) -> Rc<Self> {
+    fn set_shift(self: &Rc<Self>, v: usize) -> Option<Self> {
         if let Ok(v) = v.try_into() {
             let v: NonZeroUsize = v;
             let data = self.data.borrow();
@@ -138,13 +174,13 @@ impl<G: IdGenerator> CacheElement<G> {
                 CacheEnum::RefShift(p, delta) => (p, v.saturating_add(delta.get())),
                 _ => (self, v),
             };
-            Rc::new(CacheElement {
+            Some(CacheElement {
                 data: RefCell::new(CacheEnum::RefShift(p.clone(), v)),
                 max_ref: max_ref_shift(p.max_ref, v.get()),
                 ty: p.ty.clone(),
             })
         } else {
-            self.clone()
+            None
         }
     }
 
@@ -156,8 +192,13 @@ impl<G: IdGenerator> CacheElement<G> {
         let mut data_mut = self.data.borrow_mut();
         match data_mut.deref() {
             Primitive(..) => (),
-            Bind { .. } | RefShift(..) => {
-                CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
+            _ => {
+                let el = CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
+                if let Some(el) = el {
+                    assert_eq!(el.ty, self.ty);
+                    assert_eq!(el.max_ref, self.max_ref);
+                    *data_mut = el.data.into_inner();
+                }
             }
         }
         Ref::map(self.data.borrow(), |x| match x {
@@ -209,22 +250,40 @@ impl<G: IdGenerator> CacheElement<G> {
         }
     }
 
-    fn new_primitive(el: Element<G, Rc<Self>>, max_ref: usize, ty: ty::Type) -> Rc<Self> {
-        Rc::new(Self {
+    fn new_primitive(el: Element<G, Rc<Self>>, max_ref: usize, ty: ty::Type) -> Self {
+        Self {
             data: RefCell::new(CacheEnum::Primitive(el)),
             max_ref,
             ty,
-        })
+        }
     }
 
     fn new_argument(pos: NonZeroUsize, ty: ty::Type) -> Rc<Self> {
-        Self::new_primitive(Element::Argument { pos }, pos.get(), ty)
+        Rc::new(Self::new_primitive(
+            Element::Argument { pos },
+            pos.get(),
+            ty,
+        ))
     }
 
     fn new_application(arg: Rc<Self>, body: Rc<Self>) -> Rc<Self> {
         let ty = body.ty.clone();
         let max_ref = max(arg.max_ref, max(body.max_ref, 1) - 1);
-        Self::new_primitive(Element::Application { arg, body }, max_ref, ty)
+        Rc::new(Self::new_primitive(
+            Element::Application { arg, body },
+            max_ref,
+            ty,
+        ))
+    }
+
+    fn new_bind(self: Rc<Self>, arg: Rc<Self>) -> Result<Self> {
+        let ty = self.ty.apply(&arg.ty)?;
+        let max_ref = max(self.max_ref, arg.max_ref);
+        Ok(Self {
+            data: RefCell::new(CacheEnum::Bind { func: self, arg }),
+            max_ref,
+            ty,
+        })
     }
 }
 
@@ -348,7 +407,7 @@ impl<G: IdGenerator> Verifier<G> {
             .rev()
             .map(|x| CacheElement::new_argument(x.try_into().unwrap(), self.ty_reg.symbol()))
             .collect();
-        let mut el = self.new_object(id, arr);
+        let mut el = Rc::new(new_object(&mut self.ty_reg, id, arr));
         for _ in 0..n {
             el = self.new_universal(el);
         }
@@ -413,21 +472,25 @@ impl<G: IdGenerator> Verifier<G> {
         }
     }
 
-    fn new_object(&mut self, id: G::Id, params: Vec<Rc<CacheElement<G>>>) -> Rc<CacheElement<G>> {
-        let max_ref = params.iter().map(|x| x.max_ref).max().unwrap_or(0);
-        CacheElement::new_primitive(
-            Element::Object { id, params },
-            max_ref,
-            self.ty_reg.symbol(),
-        )
-    }
-
     fn new_universal(&mut self, body: Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
         let sym = self.ty_reg.symbol();
         let ty = self.ty_reg.infer(sym, body.ty.clone());
         let max_ref = max(body.max_ref, 1) - 1;
-        CacheElement::new_primitive(Element::Universal { body: body }, max_ref, ty)
+        Rc::new(CacheElement::new_primitive(
+            Element::Universal { body: body },
+            max_ref,
+            ty,
+        ))
     }
+}
+
+fn new_object<G: IdGenerator>(
+    ty_reg: &mut ty::Registry,
+    id: G::Id,
+    params: Vec<Rc<CacheElement<G>>>,
+) -> CacheElement<G> {
+    let max_ref = params.iter().map(|x| x.max_ref).max().unwrap_or(0);
+    CacheElement::new_primitive(Element::Object { id, params }, max_ref, ty_reg.symbol())
 }
 
 impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
@@ -441,14 +504,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let x = self.pop_element()?;
         self.pop_syn()?;
         let f = self.pop_element()?;
-        let ty = f.ty.apply(&x.ty)?;
-        let max_ref = max(x.max_ref, f.max_ref);
-        let el = CacheElement {
-            data: RefCell::new(CacheEnum::Bind { func: f, arg: x }),
-            max_ref,
-            ty,
-        };
-        self.push(StackElement::Element(Rc::new(el)));
+        self.push(StackElement::Element(Rc::new(CacheElement::new_bind(
+            f, x,
+        )?)));
         Ok(())
     }
 
