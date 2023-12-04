@@ -32,16 +32,3 @@ pub fn vec_rev_get<T>(arr: &Vec<T>, index: usize) -> Option<&T> {
         None
     }
 }
-
-pub fn defer<T, F: FnOnce() -> T>(f: F) -> impl Drop {
-    Defer(Some(f))
-}
-
-struct Defer<T, F: FnOnce() -> T>(Option<F>);
-impl<T, F: FnOnce() -> T> Drop for Defer<T, F> {
-    fn drop(&mut self) {
-        if let Some(f) = self.0.take() {
-            f();
-        }
-    }
-}

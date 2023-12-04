@@ -13,7 +13,7 @@ use crate::{
     err::{OperationError, Result},
     isa::InstructionSet,
     kit::{imply, not, Expression, Forall},
-    util::{defer, vec_rev_get, CountGenerator, IdGenerator},
+    util::{vec_rev_get, CountGenerator, IdGenerator},
 };
 
 enum Element<G: IdGenerator, P: Clone> {
@@ -88,7 +88,10 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         }
     }
 
-    fn flush_enum(&mut self, data: &CacheEnum<G, Rc<TypedElement<G>>>) -> Option<TypedElement<G>> {
+    fn flush_enum(
+        &mut self,
+        data: &CacheEnum<G, Rc<TypedElement<G>>>,
+    ) -> Option<Rc<TypedElement<G>>> {
         use CacheEnum::*;
         use Element::*;
         match data {
@@ -96,28 +99,31 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
                 let pos = pos.get() + self.ref_shift;
                 if let Some((Some(val), pre_binded_cnt)) = vec_rev_get(&self.arg_stack, pos) {
                     let binded_cnt = self.tot_bind_cnt() - pre_binded_cnt + 1;
-                    let val = val.set_shift(pos - binded_cnt)?;
-                    for arg in args.iter() {
+                    let val = Rc::new(val.set_shift(pos - binded_cnt)?);
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|x| self.flush_ptr(x).unwrap_or_else(|| x.clone()))
+                        .collect();
+                    for arg in args.iter().rev() {
                         self.bind_stack.push(arg.clone());
                     }
-                    todo!();
-                    let result = self.flush_ptr(&Rc::new(val));
+                    let el = self.flush_ptr(&val).unwrap_or(val);
                     for _ in 0..args.len() {
                         self.bind_stack.pop().unwrap();
                     }
-                    result
+                    Some(el)
                 } else {
                     let new_pos = self.calc_new_ref(pos);
-                    if pos == new_pos {
+                    if pos == new_pos && self.bind_stack.is_empty() {
                         None
                     } else {
-                        Some(TypedElement::new_primitive(
+                        Some(Rc::new(TypedElement::new_primitive(
                             Element::Variable {
                                 pos: new_pos.try_into().unwrap(),
-                                args: Vec::new(),
+                                args: args.iter().chain(self.bind_stack.iter()).cloned().collect(),
                             },
                             self.ty_reg.symbol(),
-                        ))
+                        )))
                     }
                 }
             }
@@ -129,28 +135,38 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
                 let params = results
                     .into_iter()
                     .zip(params.iter())
-                    .map(|(x, orig)| x.map_or_else(|| orig.clone(), |x| Rc::new(x)))
+                    .map(|(x, orig)| x.unwrap_or_else(|| orig.clone()))
                     .collect();
-                Some(new_object(&mut self.ty_reg, id.clone(), params))
+                Some(Rc::new(new_object(&mut self.ty_reg, id.clone(), params)))
             }
             Primitive(Universal { body }) => {
-                todo!("Pop from bind stack");
-                self.arg_stack.push((None, self.tot_bind_cnt()));
-                let _ = defer(|| self.arg_stack.pop().unwrap());
-                self.flush_ptr(body)
+                self.arg_stack.push(if let Some(v) = self.bind_stack.pop() {
+                    (Some(v), self.tot_bind_cnt() + 1)
+                } else {
+                    (None, self.tot_bind_cnt())
+                });
+                let el = self.flush_ptr(body);
+                if let (Some(v), _) = self.arg_stack.pop().unwrap() {
+                    self.bind_stack.push(v);
+                }
+                el
             }
             Bind { func, arg } => {
-                let arg = self
-                    .flush_ptr(arg)
-                    .map_or_else(|| arg.clone(), |x| Rc::new(x));
+                let mut bind_stack = Vec::new();
+                std::mem::swap(&mut bind_stack, &mut self.bind_stack);
+                let arg = self.flush_ptr(arg).unwrap_or_else(|| arg.clone());
+                std::mem::swap(&mut bind_stack, &mut self.bind_stack);
+                std::mem::drop(bind_stack);
                 self.bind_stack.push(arg);
-                let _ = defer(|| self.bind_stack.pop().unwrap());
-                self.flush_ptr(func)
+                let el = self.flush_ptr(func);
+                self.bind_stack.pop().unwrap();
+                el
             }
             RefShift(el, delta) => {
                 self.ref_shift += delta.get();
-                let _ = defer(|| self.ref_shift -= delta.get());
-                self.flush_ptr(el)
+                let el = self.flush_ptr(el);
+                self.ref_shift -= delta.get();
+                el
             }
         }
     }
@@ -165,9 +181,9 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         pos - (self.tot_bind_cnt() - binded_cnt)
     }
 
-    fn flush_ptr(&mut self, ptr: &Rc<TypedElement<G>>) -> Option<TypedElement<G>> {
+    fn flush_ptr(&mut self, ptr: &Rc<TypedElement<G>>) -> Option<Rc<TypedElement<G>>> {
         if self.bind_stack.is_empty() && ptr.max_ref == self.calc_new_ref(ptr.max_ref) {
-            return ptr.set_shift(self.ref_shift);
+            return ptr.set_shift(self.ref_shift).map(|x| Rc::new(x));
         }
         let data = ptr.data.borrow();
         self.flush_enum(data.deref())
@@ -206,22 +222,27 @@ impl<G: IdGenerator> TypedElement<G> {
         ty_reg: &mut ty::Registry,
     ) -> Ref<'a, Element<G, Rc<Self>>> {
         use CacheEnum::*;
-        let mut data_mut = self.data.borrow_mut();
-        match data_mut.deref() {
-            Primitive(..) => (),
-            _ => {
-                let el = CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
-                if let Some(el) = el {
-                    assert_eq!(el.ty, self.ty);
-                    assert_eq!(el.max_ref, self.max_ref);
-                    *data_mut = el.data.into_inner();
+        loop {
+            let mut data_mut = self.data.borrow_mut();
+            match data_mut.deref() {
+                Primitive(..) => {
+                    return Ref::map(self.data.borrow(), |x| match x {
+                        Primitive(el) => el,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {
+                    let el = CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
+                    if let Some(el) = el {
+                        assert_eq!(el.ty, self.ty);
+                        assert_eq!(el.max_ref, self.max_ref);
+                        *data_mut = Rc::try_unwrap(el)
+                            .map_or_else(|p| p.data.clone(), |x| x.data)
+                            .into_inner()
+                    }
                 }
             }
         }
-        Ref::map(self.data.borrow(), |x| match x {
-            Primitive(el) => el,
-            _ => unreachable!(),
-        })
     }
 
     fn check_equal(a: &Rc<Self>, b: &Rc<Self>, ty_reg: &mut ty::Registry) -> bool {
