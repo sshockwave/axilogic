@@ -61,7 +61,7 @@ impl Type {
         match self.data.deref() {
             Symbol => Err(OperationError::new("cannot apply symbol type")),
             Inference(p, q) => {
-                if Self::dfs_check(&self.data, &spec.data) {
+                if Self::dfs_check(p, &spec.data) {
                     Ok(Type { data: q.clone() })
                 } else {
                     Err(OperationError::new("Type mismatch for application"))

@@ -5,7 +5,7 @@ use std::{
     cmp::max,
     collections::HashMap,
     num::NonZeroUsize,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     rc::Rc,
 };
 
@@ -16,57 +16,165 @@ use crate::{
     util::{CountGenerator, IdGenerator},
 };
 
-enum Element<G: IdGenerator, P> {
+enum Element<G: IdGenerator, P: Clone> {
     Argument { pos: NonZeroUsize },
     Object { id: G::Id, params: Vec<P> },
     Universal { body: P },
     Application { arg: P, body: P },
 }
 
-enum CacheEnum<G: IdGenerator, P> {
+impl<G: IdGenerator, P: Clone> Clone for Element<G, P> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Argument { pos } => Self::Argument { pos: *pos },
+            Self::Object { id, params } => Self::Object {
+                id: id.clone(),
+                params: params.clone(),
+            },
+            Self::Universal { body } => Self::Universal { body: body.clone() },
+            Self::Application { arg, body } => Self::Application {
+                arg: arg.clone(),
+                body: body.clone(),
+            },
+        }
+    }
+}
+
+enum CacheEnum<G: IdGenerator, P: Clone> {
     Primitive(Element<G, P>),
     Bind { func: P, arg: P },
     RefShift(P, NonZeroUsize),
 }
+
+impl<G: IdGenerator, P: Clone> Clone for CacheEnum<G, P> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Primitive(el) => Self::Primitive(el.clone()),
+            Self::Bind { func, arg } => Self::Bind {
+                func: func.clone(),
+                arg: arg.clone(),
+            },
+            Self::RefShift(el, shift) => Self::RefShift(el.clone(), *shift),
+        }
+    }
+}
+
 struct CacheElement<G: IdGenerator> {
     data: RefCell<CacheEnum<G, Rc<Self>>>,
     max_ref: usize,
     ty: ty::Type,
 }
-impl<G: IdGenerator, P> CacheEnum<G, P> {
-    fn flush(
+
+fn max_ref_shift(max_ref: usize, delta: usize) -> usize {
+    if max_ref > 0 {
+        max_ref + delta
+    } else {
+        0
+    }
+}
+
+struct CacheFlusher<'a, G: IdGenerator> {
+    arg_stack: Vec<(Option<Rc<CacheElement<G>>>, usize)>,
+    bind_stack: Vec<Rc<CacheElement<G>>>,
+    ref_shift: usize,
+    ty_reg: &'a mut ty::Registry,
+}
+
+impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
+    fn new(ty_reg: &'a mut ty::Registry) -> Self {
+        Self {
+            arg_stack: Vec::new(),
+            bind_stack: Vec::new(),
+            ref_shift: 0,
+            ty_reg,
+        }
+    }
+
+    fn flush_enum(
         &mut self,
-        arg_stack: &mut Vec<(Option<P>, usize)>,
-        bind_stack: &mut Vec<P>,
-        ref_shift: usize,
-    ) -> &'_ Element<G, P> {
+        data: &mut CacheEnum<G, Rc<CacheElement<G>>>,
+    ) -> Option<CacheElement<G>> {
         use CacheEnum::*;
         use Element::*;
         todo!()
     }
+
+    fn flush_ptr(&mut self, ptr: &Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
+        let skip = if self.bind_stack.is_empty() {
+            let max_ref = max_ref_shift(ptr.max_ref, self.ref_shift);
+            let tot_bind_cnt = self.arg_stack.last().map_or(0, |x| x.1);
+            let outer_bind_cnt = if max_ref < self.arg_stack.len() {
+                self.arg_stack[self.arg_stack.len() - max_ref - 1].1
+            } else {
+                0
+            };
+            outer_bind_cnt == tot_bind_cnt
+        } else {
+            false
+        };
+        if skip {
+            return ptr.set_shift(self.ref_shift);
+        }
+        let data = ptr.data.borrow();
+        let mut data = (*data).clone();
+        if let Some(el) = self.flush_enum(&mut data) {
+            Rc::new(el)
+        } else {
+            ptr.clone()
+        }
+    }
 }
+
+impl<'a, G: IdGenerator> Drop for CacheFlusher<'a, G> {
+    fn drop(&mut self) {
+        assert!(self.arg_stack.is_empty());
+        assert!(self.bind_stack.is_empty());
+        assert!(self.ref_shift == 0);
+    }
+}
+
 impl<G: IdGenerator> CacheElement<G> {
-    fn unwrap_one(&self) -> Ref<'_, Element<G, Rc<Self>>> {
+    fn set_shift(self: &Rc<Self>, v: usize) -> Rc<Self> {
+        if let Ok(v) = v.try_into() {
+            let v: NonZeroUsize = v;
+            let (p, v) = match self.data.borrow().deref() {
+                CacheEnum::RefShift(p, delta) => (p, v.saturating_add(delta.get())),
+                _ => (self, v),
+            };
+            Rc::new(CacheElement {
+                data: RefCell::new(CacheEnum::RefShift(p.clone(), v)),
+                max_ref: p.max_ref + v.get(),
+                ty: p.ty.clone(),
+            })
+        } else {
+            self.clone()
+        }
+    }
+
+    fn unwrap_one<'a>(
+        self: &'a Rc<Self>,
+        ty_reg: &mut ty::Registry,
+    ) -> Ref<'a, Element<G, Rc<Self>>> {
         use CacheEnum::*;
         let mut data_mut = self.data.borrow_mut();
         match data_mut.deref() {
             Primitive(..) => (),
             Bind { .. } | RefShift(..) => {
-                data_mut.flush(&mut Vec::new(), &mut Vec::new(), 0);
+                CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
             }
         }
-        std::mem::drop(data_mut);
         Ref::map(self.data.borrow(), |x| match x {
             Primitive(el) => el,
             _ => unreachable!(),
         })
     }
-    fn check_equal(a: &Rc<Self>, b: &Rc<Self>) -> bool {
+
+    fn check_equal(a: &Rc<Self>, b: &Rc<Self>, ty_reg: &mut ty::Registry) -> bool {
         if Rc::ptr_eq(a, b) {
             return true;
         }
         use Element::*;
-        match (a.unwrap_one().deref(), b.unwrap_one().deref()) {
+        match (a.unwrap_one(ty_reg).deref(), b.unwrap_one(ty_reg).deref()) {
             (Argument { pos: pos1, .. }, Argument { pos: pos2, .. }) => pos1 == pos2,
             (
                 Object {
@@ -85,10 +193,10 @@ impl<G: IdGenerator> CacheElement<G> {
                 params1
                     .iter()
                     .zip(params2.iter())
-                    .all(|(x, y)| Self::check_equal(x, y))
+                    .all(|(x, y)| Self::check_equal(x, y, ty_reg))
             }
             (Universal { body: body1 }, Universal { body: body2 }) => {
-                Self::check_equal(body1, body2)
+                Self::check_equal(body1, body2, ty_reg)
             }
             (
                 Application {
@@ -99,7 +207,7 @@ impl<G: IdGenerator> CacheElement<G> {
                     arg: arg2,
                     body: body2,
                 },
-            ) => Self::check_equal(arg1, arg2) && Self::check_equal(body1, body2),
+            ) => Self::check_equal(arg1, arg2, ty_reg) && Self::check_equal(body1, body2, ty_reg),
             _ => false,
         }
     }
@@ -195,7 +303,7 @@ impl<G: IdGenerator> Verifier<G> {
         Ok(())
     }
 
-    pub fn init_sys(&mut self) -> Result<()> {
+    fn init_sys(&mut self) -> Result<()> {
         self.obj(1, "sys::not".into())?;
         self.add_obj(1, "sys::imply".into(), self.imply_id.clone())?;
         self.init_l1()?;
@@ -219,8 +327,8 @@ impl<G: IdGenerator> Verifier<G> {
         vm
     }
 
-    pub fn has(&self, s: String) -> bool {
-        self.sym_table.contains_key(&s)
+    pub fn has(&self, s: &str) -> bool {
+        self.sym_table.contains_key(s)
     }
 
     fn push(&mut self, el: StackElement<G>) {
@@ -271,7 +379,9 @@ impl<G: IdGenerator> Verifier<G> {
     }
 
     fn pop_imply(&mut self) -> Result<(Rc<CacheElement<G>>, Rc<CacheElement<G>>)> {
-        if let Element::Object { id, params } = self.pop_element()?.unwrap_one().deref() {
+        let el = self.pop_element()?;
+        let data = el.unwrap_one(&mut self.ty_reg);
+        if let Element::Object { id, params } = data.deref() {
             if id != &self.imply_id {
                 return Err(OperationError::new("Object is not imply"));
             }
@@ -441,7 +551,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         self.expect_syn()?;
         let p = self.pop_element()?;
         let (p_ans, q) = self.pop_imply()?;
-        if !CacheElement::check_equal(&p_ans, &p) {
+        if !CacheElement::check_equal(&p_ans, &p, &mut self.ty_reg) {
             return Err(OperationError::new("Using mp but condition not met"));
         }
         self.push(StackElement::Element(q));
