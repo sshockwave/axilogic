@@ -28,4 +28,7 @@ pub trait InstructionSet {
     /// Synthetic mode only
     fn sat(&mut self) -> Result<()>;
     fn arg(&mut self, n: NonZeroUsize) -> Result<()>;
+
+    // Helper (not part of the assembly)
+    fn has(&self, s: &str) -> bool;
 }

@@ -1,7 +1,7 @@
 mod ty;
 
 use std::{
-    cell::{Ref, RefCell},
+    cell::{RefCell, RefMut},
     cmp::max,
     collections::HashMap,
     num::NonZeroUsize,
@@ -218,34 +218,31 @@ impl<G: IdGenerator> TypedElement<G> {
     }
 
     fn unwrap_one<'a>(
-        self: &'a Rc<Self>,
+        self: &'a mut Rc<Self>,
         ty_reg: &mut ty::Registry,
-    ) -> Ref<'a, Element<G, Rc<Self>>> {
+    ) -> RefMut<'a, Element<G, Rc<Self>>> {
         use CacheEnum::*;
         loop {
             let mut data_mut = self.data.borrow_mut();
             match data_mut.deref() {
-                Primitive(..) => {
-                    return Ref::map(self.data.borrow(), |x| match x {
-                        Primitive(el) => el,
-                        _ => unreachable!(),
-                    });
-                }
-                _ => {
-                    let el = CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
-                    if let Some(el) = el {
-                        assert_eq!(el.ty, self.ty);
-                        assert_eq!(el.max_ref, self.max_ref);
-                        *data_mut = Rc::try_unwrap(el)
-                            .map_or_else(|p| p.data.clone(), |x| x.data)
-                            .into_inner()
-                    }
-                }
+                Primitive(..) => break,
+                _ => (),
+            }
+            let el = CacheFlusher::new(ty_reg).flush_enum(data_mut.deref_mut());
+            if let Some(el) = el {
+                assert_eq!(el.ty, self.ty);
+                assert_eq!(el.max_ref, self.max_ref);
+                std::mem::drop(data_mut);
+                *self = el;
             }
         }
+        RefMut::map(self.data.borrow_mut(), |x| match x {
+            Primitive(el) => el,
+            _ => unreachable!(),
+        })
     }
 
-    fn check_equal(a: &Rc<Self>, b: &Rc<Self>, ty_reg: &mut ty::Registry) -> bool {
+    fn check_equal(a: &mut Rc<Self>, b: &mut Rc<Self>, ty_reg: &mut ty::Registry) -> bool {
         if Rc::ptr_eq(a, b) {
             return true;
         }
@@ -253,7 +250,10 @@ impl<G: IdGenerator> TypedElement<G> {
             return false;
         }
         use Element::*;
-        match (a.unwrap_one(ty_reg).deref(), b.unwrap_one(ty_reg).deref()) {
+        match (
+            a.unwrap_one(ty_reg).deref_mut(),
+            b.unwrap_one(ty_reg).deref_mut(),
+        ) {
             (
                 Object {
                     id: id1,
@@ -269,8 +269,8 @@ impl<G: IdGenerator> TypedElement<G> {
                 }
                 assert!(params1.len() == params2.len());
                 params1
-                    .iter()
-                    .zip(params2.iter())
+                    .iter_mut()
+                    .zip(params2.iter_mut())
                     .all(|(x, y)| Self::check_equal(x, y, ty_reg))
             }
             (Universal { body: body1 }, Universal { body: body2 }) => {
@@ -289,8 +289,8 @@ impl<G: IdGenerator> TypedElement<G> {
                 pos1 == pos2
                     && args1.len() == args2.len()
                     && args1
-                        .iter()
-                        .zip(args2.iter())
+                        .iter_mut()
+                        .zip(args2.iter_mut())
                         .all(|(x, y)| Self::check_equal(x, y, ty_reg))
             }
             _ => false,
@@ -430,10 +430,6 @@ impl<G: IdGenerator> Verifier<G> {
         vm
     }
 
-    pub fn has(&self, s: &str) -> bool {
-        self.sym_table.contains_key(s)
-    }
-
     fn push(&mut self, el: StackElement<G>) {
         self.stack.push(el)
     }
@@ -482,7 +478,7 @@ impl<G: IdGenerator> Verifier<G> {
     }
 
     fn pop_imply(&mut self) -> Result<(Rc<TypedElement<G>>, Rc<TypedElement<G>>)> {
-        let el = self.pop_element()?;
+        let mut el = self.pop_element()?;
         let data = el.unwrap_one(&mut self.ty_reg);
         if let Element::Object { id, args: params } = data.deref() {
             if id != &self.imply_id {
@@ -548,9 +544,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let x = self.pop_element()?;
         self.pop_syn()?;
         let f = self.pop_element()?;
-        self.push(StackElement::Element(Rc::new(TypedElement::new_bind(
-            f, x,
-        )?)));
+        self.push(StackElement::Element(Rc::new(f.new_bind(x)?)));
         Ok(())
     }
 
@@ -646,9 +640,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
 
     fn mp(&mut self) -> Result<()> {
         self.expect_syn()?;
-        let p = self.pop_element()?;
-        let (p_ans, q) = self.pop_imply()?;
-        if !TypedElement::check_equal(&p_ans, &p, &mut self.ty_reg) {
+        let mut p = self.pop_element()?;
+        let (mut p_ans, q) = self.pop_imply()?;
+        if !TypedElement::check_equal(&mut p_ans, &mut p, &mut self.ty_reg) {
             return Err(OperationError::new("Using mp but condition not met"));
         }
         self.push(StackElement::Element(q));
@@ -666,5 +660,9 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let (vec, reg) = self.peek_types()?;
         vec.push(reg.symbol());
         Ok(())
+    }
+
+    fn has(&self, s: &str) -> bool {
+        self.sym_table.contains_key(s)
     }
 }
