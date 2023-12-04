@@ -13,7 +13,7 @@ use crate::{
     err::{OperationError, Result},
     isa::InstructionSet,
     kit::{imply, not, Expression, Forall},
-    util::{CountGenerator, IdGenerator},
+    util::{vec_rev_get, CountGenerator, IdGenerator},
 };
 
 enum Element<G: IdGenerator, P: Clone> {
@@ -103,11 +103,7 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         let skip = if self.bind_stack.is_empty() {
             let max_ref = max_ref_shift(ptr.max_ref, self.ref_shift);
             let tot_bind_cnt = self.arg_stack.last().map_or(0, |x| x.1);
-            let outer_bind_cnt = if max_ref < self.arg_stack.len() {
-                self.arg_stack[self.arg_stack.len() - max_ref - 1].1
-            } else {
-                0
-            };
+            let outer_bind_cnt = vec_rev_get(&self.arg_stack, max_ref + 1).map_or(0, |x| x.1);
             outer_bind_cnt == tot_bind_cnt
         } else {
             false
@@ -137,13 +133,14 @@ impl<G: IdGenerator> CacheElement<G> {
     fn set_shift(self: &Rc<Self>, v: usize) -> Rc<Self> {
         if let Ok(v) = v.try_into() {
             let v: NonZeroUsize = v;
-            let (p, v) = match self.data.borrow().deref() {
+            let data = self.data.borrow();
+            let (p, v) = match data.deref() {
                 CacheEnum::RefShift(p, delta) => (p, v.saturating_add(delta.get())),
                 _ => (self, v),
             };
             Rc::new(CacheElement {
                 data: RefCell::new(CacheEnum::RefShift(p.clone(), v)),
-                max_ref: p.max_ref + v.get(),
+                max_ref: max_ref_shift(p.max_ref, v.get()),
                 ty: p.ty.clone(),
             })
         } else {
@@ -457,15 +454,13 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
 
     fn arg(&mut self, n: NonZeroUsize) -> Result<()> {
         self.expect_syn()?;
-        if n.get() > self.arg_stack.len() {
-            return Err(OperationError::new(format!(
-                "Argument index out of range: {}",
-                n.get()
-            )));
-        }
         self.push(StackElement::Element(CacheElement::new_argument(
             n,
-            self.arg_stack[self.arg_stack.len() - n.get()].clone(),
+            vec_rev_get(&self.arg_stack, n.get())
+                .ok_or_else(|| {
+                    OperationError::new(format!("Argument index out of range: {}", n.get()))
+                })?
+                .clone(),
         )));
         Ok(())
     }

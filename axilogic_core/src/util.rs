@@ -23,3 +23,12 @@ impl Default for CountGenerator {
 pub fn rc_take<T: Clone>(rc: std::rc::Rc<T>) -> T {
     std::rc::Rc::try_unwrap(rc).unwrap_or_else(|rc| rc.as_ref().clone())
 }
+
+pub fn vec_rev_get<T>(arr: &Vec<T>, index: usize) -> Option<&T> {
+    let len = arr.len();
+    if index <= len {
+        Some(&arr[len - index])
+    } else {
+        None
+    }
+}
