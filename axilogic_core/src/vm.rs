@@ -20,7 +20,7 @@ enum Element<G: IdGenerator, P: Clone> {
     Argument { pos: NonZeroUsize },
     Object { id: G::Id, args: Vec<P> },
     Universal { body: P },
-    Application { arg: P, body: P },
+    Application { pos: NonZeroUsize, args: Vec<P> },
 }
 
 impl<G: IdGenerator, P: Clone> Clone for Element<G, P> {
@@ -32,9 +32,9 @@ impl<G: IdGenerator, P: Clone> Clone for Element<G, P> {
                 args: params.clone(),
             },
             Self::Universal { body } => Self::Universal { body: body.clone() },
-            Self::Application { arg, body } => Self::Application {
-                arg: arg.clone(),
-                body: body.clone(),
+            Self::Application { pos, args } => Self::Application {
+                pos: *pos,
+                args: args.clone(),
             },
         }
     }
@@ -95,7 +95,23 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         use Element::*;
         match data {
             Primitive(Argument { pos }) => {
-                todo!()
+                let pos = pos.get() + self.ref_shift;
+                if let Some((Some(val), pre_binded_cnt)) = vec_rev_get(&self.arg_stack, pos) {
+                    let binded_cnt = self.tot_bind_cnt() - pre_binded_cnt + 1;
+                    Some(val.set_shift(pos - binded_cnt)?)
+                } else {
+                    let new_pos = self.calc_new_ref(pos);
+                    if pos == new_pos {
+                        None
+                    } else {
+                        Some(TypedElement::new_primitive(
+                            Element::Argument {
+                                pos: new_pos.try_into().unwrap(),
+                            },
+                            self.ty_reg.symbol(),
+                        ))
+                    }
+                }
             }
             Primitive(Object { id, args: params }) => {
                 let results: Vec<_> = params.iter().map(|x| self.flush_ptr(x)).collect();
@@ -110,17 +126,13 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
                 Some(new_object(&mut self.ty_reg, id.clone(), params))
             }
             Primitive(Universal { body }) => {
+                todo!("Pop from bind stack");
                 self.arg_stack.push((None, self.tot_bind_cnt()));
                 let _ = defer(|| self.arg_stack.pop().unwrap());
                 self.flush_ptr(body)
             }
-            Primitive(Application { arg, body }) => {
-                let arg = self
-                    .flush_ptr(arg)
-                    .map_or_else(|| arg.clone(), |x| Rc::new(x));
-                self.arg_stack.push((Some(arg), self.tot_bind_cnt() + 1));
-                let _ = defer(|| self.arg_stack.pop().unwrap());
-                self.flush_ptr(body)
+            Primitive(Application { pos, args }) => {
+                todo!()
             }
             Bind { func, arg } => {
                 let arg = self
@@ -211,6 +223,9 @@ impl<G: IdGenerator> TypedElement<G> {
         if Rc::ptr_eq(a, b) {
             return true;
         }
+        if (a.ty != b.ty) || (a.max_ref != b.max_ref) {
+            return false;
+        }
         use Element::*;
         match (a.unwrap_one(ty_reg).deref(), b.unwrap_one(ty_reg).deref()) {
             (Argument { pos: pos1, .. }, Argument { pos: pos2, .. }) => pos1 == pos2,
@@ -238,14 +253,21 @@ impl<G: IdGenerator> TypedElement<G> {
             }
             (
                 Application {
-                    arg: arg1,
-                    body: body1,
+                    pos: pos1,
+                    args: args1,
                 },
                 Application {
-                    arg: arg2,
-                    body: body2,
+                    pos: pos2,
+                    args: args2,
                 },
-            ) => Self::check_equal(arg1, arg2, ty_reg) && Self::check_equal(body1, body2, ty_reg),
+            ) => {
+                pos1 == pos2
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(x, y)| Self::check_equal(x, y, ty_reg))
+            }
             _ => false,
         }
     }
@@ -254,9 +276,11 @@ impl<G: IdGenerator> TypedElement<G> {
         use Element::*;
         let max_ref = match &el {
             Argument { pos } => pos.get(),
-            Object { args: params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
+            Object { args, .. } => args.iter().map(|x| x.max_ref).max().unwrap_or(0),
             Universal { body } => max(body.max_ref, 1) - 1,
-            Application { arg, body } => max(arg.max_ref, max(body.max_ref, 1) - 1),
+            Application { pos, args } => {
+                max(pos.get(), args.iter().map(|x| x.max_ref).max().unwrap_or(0))
+            }
         };
         Self {
             data: RefCell::new(CacheEnum::Primitive(el)),
@@ -267,11 +291,6 @@ impl<G: IdGenerator> TypedElement<G> {
 
     fn new_argument(pos: NonZeroUsize, ty: ty::Type) -> Rc<Self> {
         Rc::new(Self::new_primitive(Element::Argument { pos }, ty))
-    }
-
-    fn new_application(arg: Rc<Self>, body: Rc<Self>) -> Rc<Self> {
-        let ty = body.ty.clone();
-        Rc::new(Self::new_primitive(Element::Application { arg, body }, ty))
     }
 
     fn new_bind(self: Rc<Self>, arg: Rc<Self>) -> Result<Self> {
