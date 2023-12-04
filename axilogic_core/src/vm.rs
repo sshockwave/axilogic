@@ -250,30 +250,28 @@ impl<G: IdGenerator> CacheElement<G> {
         }
     }
 
-    fn new_primitive(el: Element<G, Rc<Self>>, max_ref: usize, ty: ty::Type) -> Self {
+    fn new_primitive(el: Element<G, Rc<Self>>, ty: ty::Type) -> Self {
+        use Element::*;
+        let max_ref = match &el {
+            Argument { pos } => pos.get(),
+            Object { params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
+            Universal { body } => max(body.max_ref, 1) - 1,
+            Application { arg, body } => max(arg.max_ref, max(body.max_ref, 1) - 1),
+        };
         Self {
             data: RefCell::new(CacheEnum::Primitive(el)),
-            max_ref,
             ty,
+            max_ref,
         }
     }
 
     fn new_argument(pos: NonZeroUsize, ty: ty::Type) -> Rc<Self> {
-        Rc::new(Self::new_primitive(
-            Element::Argument { pos },
-            pos.get(),
-            ty,
-        ))
+        Rc::new(Self::new_primitive(Element::Argument { pos }, ty))
     }
 
     fn new_application(arg: Rc<Self>, body: Rc<Self>) -> Rc<Self> {
         let ty = body.ty.clone();
-        let max_ref = max(arg.max_ref, max(body.max_ref, 1) - 1);
-        Rc::new(Self::new_primitive(
-            Element::Application { arg, body },
-            max_ref,
-            ty,
-        ))
+        Rc::new(Self::new_primitive(Element::Application { arg, body }, ty))
     }
 
     fn new_bind(self: Rc<Self>, arg: Rc<Self>) -> Result<Self> {
@@ -475,10 +473,8 @@ impl<G: IdGenerator> Verifier<G> {
     fn new_universal(&mut self, body: Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
         let sym = self.ty_reg.symbol();
         let ty = self.ty_reg.infer(sym, body.ty.clone());
-        let max_ref = max(body.max_ref, 1) - 1;
         Rc::new(CacheElement::new_primitive(
             Element::Universal { body: body },
-            max_ref,
             ty,
         ))
     }
@@ -489,8 +485,7 @@ fn new_object<G: IdGenerator>(
     id: G::Id,
     params: Vec<Rc<CacheElement<G>>>,
 ) -> CacheElement<G> {
-    let max_ref = params.iter().map(|x| x.max_ref).max().unwrap_or(0);
-    CacheElement::new_primitive(Element::Object { id, params }, max_ref, ty_reg.symbol())
+    CacheElement::new_primitive(Element::Object { id, params }, ty_reg.symbol())
 }
 
 impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
