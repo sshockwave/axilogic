@@ -18,7 +18,7 @@ use crate::{
 
 enum Element<G: IdGenerator, P: Clone> {
     Argument { pos: NonZeroUsize },
-    Object { id: G::Id, params: Vec<P> },
+    Object { id: G::Id, args: Vec<P> },
     Universal { body: P },
     Application { arg: P, body: P },
 }
@@ -27,9 +27,9 @@ impl<G: IdGenerator, P: Clone> Clone for Element<G, P> {
     fn clone(&self) -> Self {
         match self {
             Self::Argument { pos } => Self::Argument { pos: *pos },
-            Self::Object { id, params } => Self::Object {
+            Self::Object { id, args: params } => Self::Object {
                 id: id.clone(),
-                params: params.clone(),
+                args: params.clone(),
             },
             Self::Universal { body } => Self::Universal { body: body.clone() },
             Self::Application { arg, body } => Self::Application {
@@ -59,7 +59,7 @@ impl<G: IdGenerator, P: Clone> Clone for CacheEnum<G, P> {
     }
 }
 
-struct CacheElement<G: IdGenerator> {
+struct TypedElement<G: IdGenerator> {
     data: RefCell<CacheEnum<G, Rc<Self>>>,
     max_ref: usize,
     ty: ty::Type,
@@ -74,8 +74,8 @@ fn max_ref_shift(max_ref: usize, delta: usize) -> usize {
 }
 
 struct CacheFlusher<'a, G: IdGenerator> {
-    arg_stack: Vec<(Option<Rc<CacheElement<G>>>, usize)>,
-    bind_stack: Vec<Rc<CacheElement<G>>>,
+    arg_stack: Vec<(Option<Rc<TypedElement<G>>>, usize)>,
+    bind_stack: Vec<Rc<TypedElement<G>>>,
     ref_shift: usize,
     ty_reg: &'a mut ty::Registry,
 }
@@ -90,14 +90,14 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         }
     }
 
-    fn flush_enum(&mut self, data: &CacheEnum<G, Rc<CacheElement<G>>>) -> Option<CacheElement<G>> {
+    fn flush_enum(&mut self, data: &CacheEnum<G, Rc<TypedElement<G>>>) -> Option<TypedElement<G>> {
         use CacheEnum::*;
         use Element::*;
         match data {
             Primitive(Argument { pos }) => {
                 todo!()
             }
-            Primitive(Object { id, params }) => {
+            Primitive(Object { id, args: params }) => {
                 let results: Vec<_> = params.iter().map(|x| self.flush_ptr(x)).collect();
                 if results.iter().all(|x| x.is_none()) {
                     return None;
@@ -148,7 +148,7 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
         pos - (self.tot_bind_cnt() - binded_cnt)
     }
 
-    fn flush_ptr(&mut self, ptr: &Rc<CacheElement<G>>) -> Option<CacheElement<G>> {
+    fn flush_ptr(&mut self, ptr: &Rc<TypedElement<G>>) -> Option<TypedElement<G>> {
         if self.bind_stack.is_empty() && ptr.max_ref == self.calc_new_ref(ptr.max_ref) {
             return ptr.set_shift(self.ref_shift);
         }
@@ -165,7 +165,7 @@ impl<'a, G: IdGenerator> Drop for CacheFlusher<'a, G> {
     }
 }
 
-impl<G: IdGenerator> CacheElement<G> {
+impl<G: IdGenerator> TypedElement<G> {
     fn set_shift(self: &Rc<Self>, v: usize) -> Option<Self> {
         if let Ok(v) = v.try_into() {
             let v: NonZeroUsize = v;
@@ -174,7 +174,7 @@ impl<G: IdGenerator> CacheElement<G> {
                 CacheEnum::RefShift(p, delta) => (p, v.saturating_add(delta.get())),
                 _ => (self, v),
             };
-            Some(CacheElement {
+            Some(TypedElement {
                 data: RefCell::new(CacheEnum::RefShift(p.clone(), v)),
                 max_ref: max_ref_shift(p.max_ref, v.get()),
                 ty: p.ty.clone(),
@@ -217,11 +217,11 @@ impl<G: IdGenerator> CacheElement<G> {
             (
                 Object {
                     id: id1,
-                    params: params1,
+                    args: params1,
                 },
                 Object {
                     id: id2,
-                    params: params2,
+                    args: params2,
                 },
             ) => {
                 if id1 != id2 {
@@ -254,7 +254,7 @@ impl<G: IdGenerator> CacheElement<G> {
         use Element::*;
         let max_ref = match &el {
             Argument { pos } => pos.get(),
-            Object { params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
+            Object { args: params, .. } => params.iter().map(|x| x.max_ref).max().unwrap_or(0),
             Universal { body } => max(body.max_ref, 1) - 1,
             Application { arg, body } => max(arg.max_ref, max(body.max_ref, 1) - 1),
         };
@@ -289,7 +289,7 @@ enum StackElement<G: IdGenerator> {
     Argument,
     Synthetic,
     Types(Vec<ty::Type>),
-    Element(Rc<CacheElement<G>>),
+    Element(Rc<TypedElement<G>>),
 }
 
 pub struct Verifier<G: IdGenerator = CountGenerator> {
@@ -299,7 +299,7 @@ pub struct Verifier<G: IdGenerator = CountGenerator> {
     stack: Vec<StackElement<G>>,
     ty_reg: ty::Registry,
     imply_id: G::Id,
-    sym_table: HashMap<String, (bool, Rc<CacheElement<G>>)>, // is_real, element
+    sym_table: HashMap<String, (bool, Rc<TypedElement<G>>)>, // is_real, element
 }
 
 fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
@@ -393,7 +393,7 @@ impl<G: IdGenerator> Verifier<G> {
         s_pop(&mut self.stack)
     }
 
-    fn add_sym(&mut self, s: String, is_real: bool, el: Rc<CacheElement<G>>) -> Result<()> {
+    fn add_sym(&mut self, s: String, is_real: bool, el: Rc<TypedElement<G>>) -> Result<()> {
         if let Some(_) = self.sym_table.insert(s, (is_real, el)) {
             return Err(OperationError::new("Symbol already exists"));
         }
@@ -403,7 +403,7 @@ impl<G: IdGenerator> Verifier<G> {
     fn add_obj(&mut self, n: usize, s: String, id: G::Id) -> Result<()> {
         let arr = (1..=n)
             .rev()
-            .map(|x| CacheElement::new_argument(x.try_into().unwrap(), self.ty_reg.symbol()))
+            .map(|x| TypedElement::new_argument(x.try_into().unwrap(), self.ty_reg.symbol()))
             .collect();
         let mut el = Rc::new(new_object(&mut self.ty_reg, id, arr));
         for _ in 0..n {
@@ -413,7 +413,7 @@ impl<G: IdGenerator> Verifier<G> {
         Ok(())
     }
 
-    fn pop_element(&mut self) -> Result<Rc<CacheElement<G>>> {
+    fn pop_element(&mut self) -> Result<Rc<TypedElement<G>>> {
         if let StackElement::Element(el) = self.pop()? {
             Ok(el)
         } else {
@@ -432,10 +432,10 @@ impl<G: IdGenerator> Verifier<G> {
         }
     }
 
-    fn pop_imply(&mut self) -> Result<(Rc<CacheElement<G>>, Rc<CacheElement<G>>)> {
+    fn pop_imply(&mut self) -> Result<(Rc<TypedElement<G>>, Rc<TypedElement<G>>)> {
         let el = self.pop_element()?;
         let data = el.unwrap_one(&mut self.ty_reg);
-        if let Element::Object { id, params } = data.deref() {
+        if let Element::Object { id, args: params } = data.deref() {
             if id != &self.imply_id {
                 return Err(OperationError::new("Object is not imply"));
             }
@@ -470,10 +470,10 @@ impl<G: IdGenerator> Verifier<G> {
         }
     }
 
-    fn new_universal(&mut self, body: Rc<CacheElement<G>>) -> Rc<CacheElement<G>> {
+    fn new_universal(&mut self, body: Rc<TypedElement<G>>) -> Rc<TypedElement<G>> {
         let sym = self.ty_reg.symbol();
         let ty = self.ty_reg.infer(sym, body.ty.clone());
-        Rc::new(CacheElement::new_primitive(
+        Rc::new(TypedElement::new_primitive(
             Element::Universal { body: body },
             ty,
         ))
@@ -483,9 +483,9 @@ impl<G: IdGenerator> Verifier<G> {
 fn new_object<G: IdGenerator>(
     ty_reg: &mut ty::Registry,
     id: G::Id,
-    params: Vec<Rc<CacheElement<G>>>,
-) -> CacheElement<G> {
-    CacheElement::new_primitive(Element::Object { id, params }, ty_reg.symbol())
+    params: Vec<Rc<TypedElement<G>>>,
+) -> TypedElement<G> {
+    TypedElement::new_primitive(Element::Object { id, args: params }, ty_reg.symbol())
 }
 
 impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
@@ -499,7 +499,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         let x = self.pop_element()?;
         self.pop_syn()?;
         let f = self.pop_element()?;
-        self.push(StackElement::Element(Rc::new(CacheElement::new_bind(
+        self.push(StackElement::Element(Rc::new(TypedElement::new_bind(
             f, x,
         )?)));
         Ok(())
@@ -507,7 +507,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
 
     fn arg(&mut self, n: NonZeroUsize) -> Result<()> {
         self.expect_syn()?;
-        self.push(StackElement::Element(CacheElement::new_argument(
+        self.push(StackElement::Element(TypedElement::new_argument(
             n,
             vec_rev_get(&self.arg_stack, n.get())
                 .ok_or_else(|| {
@@ -599,7 +599,7 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
         self.expect_syn()?;
         let p = self.pop_element()?;
         let (p_ans, q) = self.pop_imply()?;
-        if !CacheElement::check_equal(&p_ans, &p, &mut self.ty_reg) {
+        if !TypedElement::check_equal(&p_ans, &p, &mut self.ty_reg) {
             return Err(OperationError::new("Using mp but condition not met"));
         }
         self.push(StackElement::Element(q));
