@@ -113,31 +113,44 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
                     }
                     Some(el)
                 } else {
+                    let new_args: Vec<_> = args.iter().map(|x| self.flush_ptr(x)).collect();
                     let new_pos = self.calc_new_ref(pos);
-                    if pos == new_pos && self.bind_stack.is_empty() {
+                    if pos == new_pos
+                        && self.bind_stack.is_empty()
+                        && new_args.iter().all(|x| x.is_none())
+                    {
                         None
                     } else {
                         Some(Rc::new(TypedElement::new_primitive(
                             Element::Variable {
                                 pos: new_pos.try_into().unwrap(),
-                                args: args.iter().chain(self.bind_stack.iter()).cloned().collect(),
+                                args: new_args
+                                    .iter()
+                                    .zip(args.iter())
+                                    .map(|(x, orig)| x.as_ref().unwrap_or_else(|| orig))
+                                    .chain(self.bind_stack.iter())
+                                    .cloned()
+                                    .collect(),
                             },
                             self.ty_reg.symbol(),
                         )))
                     }
                 }
             }
-            Primitive(Object { id, args: params }) => {
-                let results: Vec<_> = params.iter().map(|x| self.flush_ptr(x)).collect();
-                if results.iter().all(|x| x.is_none()) {
+            Primitive(Object { id, args }) => {
+                let new_args: Vec<_> = args.iter().map(|x| self.flush_ptr(x)).collect();
+                if new_args.iter().all(|x| x.is_none()) {
                     return None;
                 }
-                let params = results
-                    .into_iter()
-                    .zip(params.iter())
-                    .map(|(x, orig)| x.unwrap_or_else(|| orig.clone()))
-                    .collect();
-                Some(Rc::new(new_object(&mut self.ty_reg, id.clone(), params)))
+                Some(Rc::new(new_object(
+                    &mut self.ty_reg,
+                    id.clone(),
+                    new_args
+                        .into_iter()
+                        .zip(args.iter())
+                        .map(|(x, orig)| x.unwrap_or_else(|| orig.clone()))
+                        .collect(),
+                )))
             }
             Primitive(Universal { body }) => {
                 self.arg_stack.push(if let Some(v) = self.bind_stack.pop() {
@@ -156,7 +169,6 @@ impl<'a, G: IdGenerator> CacheFlusher<'a, G> {
                 std::mem::swap(&mut bind_stack, &mut self.bind_stack);
                 let arg = self.flush_ptr(arg).unwrap_or_else(|| arg.clone());
                 std::mem::swap(&mut bind_stack, &mut self.bind_stack);
-                std::mem::drop(bind_stack);
                 self.bind_stack.push(arg);
                 let el = self.flush_ptr(func);
                 self.bind_stack.pop().unwrap();
