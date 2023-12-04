@@ -7,7 +7,6 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     rc::Rc,
-    str::pattern::Pattern,
 };
 
 use crate::{
@@ -26,7 +25,7 @@ enum Element<G: IdGenerator, P> {
 
 enum CacheEnum<G: IdGenerator, P> {
     Primitive(Element<G, P>),
-    Bind { body: P, arg: P },
+    Bind { func: P, arg: P },
     RefShift(P, NonZeroUsize),
 }
 struct CacheElement<G: IdGenerator> {
@@ -34,13 +33,32 @@ struct CacheElement<G: IdGenerator> {
     max_ref: usize,
     ty: ty::Type,
 }
+impl<G: IdGenerator, P> CacheEnum<G, P> {
+    fn flush(
+        &mut self,
+        arg_stack: &mut Vec<(Option<P>, usize)>,
+        bind_stack: &mut Vec<P>,
+        ref_shift: usize,
+    ) -> &'_ Element<G, P> {
+        use CacheEnum::*;
+        use Element::*;
+        todo!()
+    }
+}
 impl<G: IdGenerator> CacheElement<G> {
     fn unwrap_one(&self) -> Ref<'_, Element<G, Rc<Self>>> {
         use CacheEnum::*;
+        let mut data_mut = self.data.borrow_mut();
+        match data_mut.deref() {
+            Primitive(..) => (),
+            Bind { .. } | RefShift(..) => {
+                data_mut.flush(&mut Vec::new(), &mut Vec::new(), 0);
+            }
+        }
+        std::mem::drop(data_mut);
         Ref::map(self.data.borrow(), |x| match x {
             Primitive(el) => el,
-            Bind { .. } => todo!(),
-            RefShift(_, _) => todo!(),
+            _ => unreachable!(),
         })
     }
     fn check_equal(a: &Rc<Self>, b: &Rc<Self>) -> bool {
@@ -120,13 +138,6 @@ pub struct Verifier<G: IdGenerator = CountGenerator> {
     ty_reg: ty::Registry,
     imply_id: G::Id,
     sym_table: HashMap<String, (bool, Rc<CacheElement<G>>)>, // is_real, element
-}
-
-fn s_top<T>(s: &mut Vec<T>) -> Result<&mut T> {
-    match s.last_mut() {
-        Some(x) => Ok(x),
-        None => Err(OperationError::new("Stack underflow")),
-    }
 }
 
 fn s_pop<T>(s: &mut Vec<T>) -> Result<T> {
@@ -240,14 +251,27 @@ impl<G: IdGenerator> Verifier<G> {
         Ok(())
     }
 
-    fn pop_imply(&mut self) -> Result<(Rc<CacheElement<G>>, Rc<CacheElement<G>>)> {
-        let pq = if let StackElement::Element(pq) = self.pop()? {
-            pq
+    fn pop_element(&mut self) -> Result<Rc<CacheElement<G>>> {
+        if let StackElement::Element(el) = self.pop()? {
+            Ok(el)
         } else {
-            return Err(OperationError::new("Imply statement not found"));
-        };
-        let pq = pq.unwrap_one();
-        if let Element::Object { id, params } = pq.deref() {
+            Err(OperationError::new("Expected element on stack top"))
+        }
+    }
+
+    fn pop_syn(&mut self) -> Result<()> {
+        if let StackElement::Synthetic = self.pop()? {
+            self.syn_cnt -= 1;
+            Ok(())
+        } else {
+            return Err(OperationError::new(
+                "Exporting an element in non-synthetic mode",
+            ));
+        }
+    }
+
+    fn pop_imply(&mut self) -> Result<(Rc<CacheElement<G>>, Rc<CacheElement<G>>)> {
+        if let Element::Object { id, params } = self.pop_element()?.unwrap_one().deref() {
             if id != &self.imply_id {
                 return Err(OperationError::new("Object is not imply"));
             }
@@ -258,6 +282,27 @@ impl<G: IdGenerator> Verifier<G> {
             })
         } else {
             Err(OperationError::new("Not imply object"))
+        }
+    }
+
+    fn expect_syn(&mut self) -> Result<()> {
+        if self.syn_cnt == 0 {
+            return Err(OperationError::new("Expected synthetic mode"));
+        }
+        Ok(())
+    }
+
+    fn expect_real(&mut self) -> Result<()> {
+        if self.syn_cnt > 0 {
+            return Err(OperationError::new("Expected non-synthetic mode"));
+        }
+        Ok(())
+    }
+
+    fn peek_types(&mut self) -> Result<(&mut Vec<ty::Type>, &mut ty::Registry)> {
+        match self.stack.last_mut() {
+            Some(StackElement::Types(vec)) => Ok((vec, &mut self.ty_reg)),
+            _ => Err(OperationError::new("Expected types on stack top")),
         }
     }
 
@@ -286,47 +331,22 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn app(&mut self) -> Result<()> {
-        let x = if let StackElement::Element(x) = self.pop()? {
-            x
-        } else {
-            return Err(OperationError::new("Using app on an invalid element"));
-        };
-        let f = if let StackElement::Element(f) = self.pop()? {
-            f
-        } else {
-            return Err(OperationError::new("Using app on an invalid element"));
-        };
+        let x = self.pop_element()?;
+        self.pop_syn()?;
+        let f = self.pop_element()?;
         let ty = f.ty.apply(&x.ty)?;
-        let f_el = f.unwrap_one();
-        let f_ref = f_el.deref();
-        let el = StackElement::Element(match f_ref {
-            Element::Universal { body } => {
-                let max_ref = max(x.max_ref, f.max_ref);
-                Rc::new(CacheElement {
-                    data: RefCell::new(CacheEnum::Bind {
-                        body: body.clone(),
-                        arg: x,
-                    }),
-                    max_ref,
-                    ty,
-                })
-            }
-            Element::Application { .. } | Element::Argument { .. } => {
-                std::mem::drop(f_el);
-                CacheElement::new_application(x, f)
-            }
-            _ => return Err(OperationError::new("Using app on an invalid element")),
-        });
-        self.push(el);
+        let max_ref = max(x.max_ref, f.max_ref);
+        let el = CacheElement {
+            data: RefCell::new(CacheEnum::Bind { func: f, arg: x }),
+            max_ref,
+            ty,
+        };
+        self.push(StackElement::Element(Rc::new(el)));
         Ok(())
     }
 
     fn arg(&mut self, n: NonZeroUsize) -> Result<()> {
-        if self.syn_cnt == 0 {
-            return Err(OperationError::new(
-                "Using argument of function in non-synthetic mode",
-            ));
-        }
+        self.expect_syn()?;
         if n.get() > self.arg_stack.len() {
             return Err(OperationError::new(format!(
                 "Argument index out of range: {}",
@@ -346,16 +366,8 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn def(&mut self, s: String) -> Result<()> {
-        if self.syn_cnt > 0 {
-            return Err(OperationError::new(
-                "Exporting an element in synthetic mode but calling `def`",
-            ));
-        }
-        let el = if let StackElement::Element(el) = self.pop()? {
-            el
-        } else {
-            return Err(OperationError::new("Exporting an invalid element"));
-        };
+        self.expect_real()?;
+        let el = self.pop_element()?;
         if el.max_ref != 0 {
             return Err(OperationError::new("Exporting an unbounded element"));
         }
@@ -364,18 +376,8 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn hyp(&mut self, s: String) -> Result<()> {
-        let el = if let StackElement::Element(el) = self.pop()? {
-            el
-        } else {
-            return Err(OperationError::new("Exporting an invalid element"));
-        };
-        if let StackElement::Synthetic = self.pop()? {
-            self.syn_cnt -= 1;
-        } else {
-            return Err(OperationError::new(
-                "Exporting an element in non-synthetic mode",
-            ));
-        }
+        let el = self.pop_element()?;
+        self.pop_syn()?;
         if el.max_ref != 0 {
             return Err(OperationError::new("Exporting an unbounded element"));
         }
@@ -389,15 +391,10 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn hkt(&mut self) -> Result<()> {
-        let el = s_top(&mut self.stack)?;
-        let vec = if let StackElement::Types(vec) = el {
-            vec
-        } else {
-            return Err(OperationError::new("Using hkt without uni"));
-        };
+        let (vec, reg) = self.peek_types()?;
         let q = s_pop(vec)?;
         let p = s_pop(vec)?;
-        vec.push(self.ty_reg.infer(p, q));
+        vec.push(reg.infer(p, q));
         Ok(())
     }
 
@@ -441,16 +438,8 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn mp(&mut self) -> Result<()> {
-        if self.syn_cnt > 0 {
-            return Err(OperationError::new(
-                "Use sat instead of mp in synthetic mode",
-            ));
-        }
-        let p = if let StackElement::Element(p) = self.pop()? {
-            p
-        } else {
-            return Err(OperationError::new("Using mp on an invalid element"));
-        };
+        self.expect_syn()?;
+        let p = self.pop_element()?;
         let (p_ans, q) = self.pop_imply()?;
         if !CacheElement::check_equal(&p_ans, &p) {
             return Err(OperationError::new("Using mp but condition not met"));
@@ -460,22 +449,15 @@ impl<G: IdGenerator> super::isa::InstructionSet for Verifier<G> {
     }
 
     fn sat(&mut self) -> Result<()> {
-        if self.syn_cnt == 0 {
-            return Err(OperationError::new("Using sat in non-synthetic mode"));
-        }
+        self.expect_real()?;
         let (_, q) = self.pop_imply()?;
         self.push(StackElement::Element(q));
         Ok(())
     }
 
     fn var(&mut self) -> Result<()> {
-        let el = s_top(&mut self.stack)?;
-        let vec = if let StackElement::Types(vec) = el {
-            vec
-        } else {
-            return Err(OperationError::new("Using var without uni"));
-        };
-        vec.push(self.ty_reg.symbol());
+        let (vec, reg) = self.peek_types()?;
+        vec.push(reg.symbol());
         Ok(())
     }
 }
